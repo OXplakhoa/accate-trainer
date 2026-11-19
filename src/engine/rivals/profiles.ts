@@ -403,12 +403,7 @@ export function selectRivalsForTable(input: SelectRivalsInput): SelectRivalsResu
     seenPool.add(id);
   }
 
-  let targetCount: number;
-  if (input.rivalCount !== undefined) {
-    targetCount = input.rivalCount;
-  } else if (input.seatIndices !== undefined) {
-    targetCount = input.seatIndices.length;
-  } else if (input.totalPlayers !== undefined) {
+  if (input.totalPlayers !== undefined) {
     if (
       !Number.isInteger(input.totalPlayers) ||
       input.totalPlayers < MIN_PLAYERS ||
@@ -420,6 +415,14 @@ export function selectRivalsForTable(input: SelectRivalsInput): SelectRivalsResu
         message: `totalPlayers must be an integer in [${MIN_PLAYERS}, ${MAX_PLAYERS}], received ${String(input.totalPlayers)}`,
       };
     }
+  }
+
+  let targetCount: number;
+  if (input.rivalCount !== undefined) {
+    targetCount = input.rivalCount;
+  } else if (input.seatIndices !== undefined) {
+    targetCount = input.seatIndices.length;
+  } else if (input.totalPlayers !== undefined) {
     targetCount = input.totalPlayers - 1;
   } else {
     return {
@@ -438,6 +441,14 @@ export function selectRivalsForTable(input: SelectRivalsInput): SelectRivalsResu
     };
   }
 
+  if (input.totalPlayers !== undefined && targetCount > input.totalPlayers - 1) {
+    return {
+      ok: false,
+      code: 'invalid-seat-count',
+      message: `Requested rival count (${targetCount}) exceeds available rival seats (${input.totalPlayers - 1}) for totalPlayers (${input.totalPlayers})`,
+    };
+  }
+
   let seatIndices: number[];
   if (input.seatIndices !== undefined) {
     if (input.seatIndices.length !== targetCount) {
@@ -447,9 +458,24 @@ export function selectRivalsForTable(input: SelectRivalsInput): SelectRivalsResu
         message: `seatIndices length (${input.seatIndices.length}) does not match rivalCount (${targetCount})`,
       };
     }
+    if (
+      input.heroSeatIndex !== undefined &&
+      (!Number.isInteger(input.heroSeatIndex) || input.heroSeatIndex < 0)
+    ) {
+      return {
+        ok: false,
+        code: 'invalid-seat-indices',
+        message: `Invalid heroSeatIndex: ${String(input.heroSeatIndex)}`,
+      };
+    }
     const seenSeats = new Set<number>();
     for (const seatIdx of input.seatIndices) {
-      if (!Number.isInteger(seatIdx) || seatIdx < 0 || seenSeats.has(seatIdx)) {
+      if (
+        !Number.isInteger(seatIdx) ||
+        seatIdx < 0 ||
+        seenSeats.has(seatIdx) ||
+        (input.heroSeatIndex !== undefined && seatIdx === input.heroSeatIndex)
+      ) {
         return {
           ok: false,
           code: 'invalid-seat-indices',
@@ -474,6 +500,13 @@ export function selectRivalsForTable(input: SelectRivalsInput): SelectRivalsResu
       if (s !== heroSeat && seatIndices.length < targetCount) {
         seatIndices.push(s);
       }
+    }
+    if (seatIndices.length !== targetCount) {
+      return {
+        ok: false,
+        code: 'invalid-seat-count',
+        message: `Could only assign ${seatIndices.length} seats for ${targetCount} requested rivals`,
+      };
     }
   }
 

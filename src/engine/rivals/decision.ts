@@ -227,6 +227,10 @@ export function decideRivalAction(
     throw new Error(`Invalid RivalDecisionInput: ${validation.reason ?? 'unknown validation error'}`);
   }
 
+  if (input.activePlayerId === null) {
+    throw new Error('Cannot decide rival action outside betting phase (activePlayerId is null)');
+  }
+
   const seat = findActorSeat(input);
   const legal =
     input.legalActions ??

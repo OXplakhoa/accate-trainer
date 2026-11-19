@@ -16,6 +16,21 @@ export const NONG_MIN_TILT_HANDS = 3;
 export const NONG_MAX_TILT_HANDS = 5;
 
 const VALID_SUITS: ReadonlySet<string> = new Set<Suit>(['s', 'h', 'd', 'c']);
+const ALLOWED_SUMMARY_KEYS: ReadonlySet<string> = new Set([
+  'seatedPlayerIds',
+  'outcomeKind',
+  'board',
+  'revealedShowdownCards',
+  'potAwards',
+]);
+const ALLOWED_POT_SUMMARY_KEYS: ReadonlySet<string> = new Set([
+  'potIndex',
+  'potAmount',
+  'eligiblePlayerIds',
+  'tiedTopPlayerIds',
+  'awards',
+]);
+const ALLOWED_AWARD_KEYS: ReadonlySet<string> = new Set(['playerId', 'amount']);
 
 function cloneCard(card: Card): Card {
   return Object.freeze({ rank: card.rank, suit: card.suit });
@@ -25,18 +40,42 @@ function cardKey(card: Card): string {
   return `${card.rank}:${card.suit}`;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isNonNegativeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function checkAllowedKeys(
+  obj: Record<string, unknown>,
+  allowedKeys: ReadonlySet<string>,
+  label: string,
+): string | null {
+  for (const key of Object.keys(obj)) {
+    if (!allowedKeys.has(key)) {
+      return `Forbidden or unexpected field "${key}" present on ${label}`;
+    }
+  }
+  return null;
+}
+
 function isValidCard(card: unknown): card is Card {
-  if (typeof card !== 'object' || card === null) {
+  if (!isPlainRecord(card) || Object.keys(card).length !== 2) {
     return false;
   }
-  const rec = card as Record<string, unknown>;
   return (
-    typeof rec['rank'] === 'number' &&
-    Number.isInteger(rec['rank']) &&
-    rec['rank'] >= 2 &&
-    rec['rank'] <= 14 &&
-    typeof rec['suit'] === 'string' &&
-    VALID_SUITS.has(rec['suit'])
+    typeof card['rank'] === 'number' &&
+    Number.isInteger(card['rank']) &&
+    card['rank'] >= 2 &&
+    card['rank'] <= 14 &&
+    typeof card['suit'] === 'string' &&
+    VALID_SUITS.has(card['suit'])
   );
 }
 
@@ -133,21 +172,30 @@ export function summarizeCompletedHandForRivals(handState: HandState): PublicHan
  * Rejects summaries that contain unrevealed hole cards (e.g. folded players or fold-win hands).
  */
 export function validatePublicHandResultSummary(summary: unknown): RivalValidationResult {
-  if (typeof summary !== 'object' || summary === null || Array.isArray(summary)) {
+  if (!isPlainRecord(summary)) {
     return { ok: false, reason: 'Summary must be a non-null plain object' };
   }
-  const rec = summary as Record<string, unknown>;
 
-  if (!Array.isArray(rec['seatedPlayerIds']) || rec['seatedPlayerIds'].length === 0) {
-    return { ok: false, reason: 'seatedPlayerIds must be a non-empty array' };
+  const topKeyErr = checkAllowedKeys(summary, ALLOWED_SUMMARY_KEYS, 'PublicHandResultSummary');
+  if (topKeyErr !== null) {
+    return { ok: false, reason: topKeyErr };
   }
 
-  const outcomeKind = rec['outcomeKind'];
+  const seatedPlayerIds = summary['seatedPlayerIds'];
+  if (
+    !Array.isArray(seatedPlayerIds) ||
+    seatedPlayerIds.length === 0 ||
+    !seatedPlayerIds.every(isNonEmptyString)
+  ) {
+    return { ok: false, reason: 'seatedPlayerIds must be a non-empty array of strings' };
+  }
+
+  const outcomeKind = summary['outcomeKind'];
   if (outcomeKind !== 'fold-win' && outcomeKind !== 'showdown') {
     return { ok: false, reason: `Invalid outcomeKind: ${String(outcomeKind)}` };
   }
 
-  const board = rec['board'];
+  const board = summary['board'];
   if (!Array.isArray(board)) {
     return { ok: false, reason: 'board must be an array' };
   }
@@ -163,19 +211,18 @@ export function validatePublicHandResultSummary(summary: unknown): RivalValidati
     seenCards.add(key);
   }
 
-  const revealed = rec['revealedShowdownCards'];
-  if (typeof revealed !== 'object' || revealed === null || Array.isArray(revealed)) {
+  const revealed = summary['revealedShowdownCards'];
+  if (!isPlainRecord(revealed)) {
     return { ok: false, reason: 'revealedShowdownCards must be an object' };
   }
-  const revealedRec = revealed as Record<string, unknown>;
 
-  const potAwards = rec['potAwards'];
+  const potAwards = summary['potAwards'];
   if (!Array.isArray(potAwards)) {
     return { ok: false, reason: 'potAwards must be an array' };
   }
 
   if (outcomeKind === 'fold-win') {
-    if (Object.keys(revealedRec).length > 0) {
+    if (Object.keys(revealed).length > 0) {
       return {
         ok: false,
         reason: 'fold-win summary must not contain revealedShowdownCards',
@@ -196,35 +243,59 @@ export function validatePublicHandResultSummary(summary: unknown): RivalValidati
 
   const eligiblePlayers = new Set<string>();
   for (const pot of potAwards) {
-    if (typeof pot !== 'object' || pot === null) {
+    if (!isPlainRecord(pot)) {
       return { ok: false, reason: 'Invalid potAward entry' };
     }
-    const potRec = pot as Record<string, unknown>;
+    const potKeyErr = checkAllowedKeys(pot, ALLOWED_POT_SUMMARY_KEYS, 'potAwards entry');
+    if (potKeyErr !== null) {
+      return { ok: false, reason: potKeyErr };
+    }
+    const eligibleIds = pot['eligiblePlayerIds'];
+    const tiedIds = pot['tiedTopPlayerIds'];
+    const awards = pot['awards'];
     if (
-      typeof potRec['potIndex'] !== 'number' ||
-      typeof potRec['potAmount'] !== 'number' ||
-      potRec['potAmount'] < 0 ||
-      !Array.isArray(potRec['eligiblePlayerIds']) ||
-      !Array.isArray(potRec['tiedTopPlayerIds']) ||
-      !Array.isArray(potRec['awards'])
+      !isNonNegativeInt(pot['potIndex']) ||
+      !isNonNegativeInt(pot['potAmount']) ||
+      !Array.isArray(eligibleIds) ||
+      eligibleIds.length === 0 ||
+      !eligibleIds.every(isNonEmptyString) ||
+      !Array.isArray(tiedIds) ||
+      !tiedIds.every(isNonEmptyString) ||
+      !Array.isArray(awards)
     ) {
       return { ok: false, reason: 'Malformed potAward fields in summary' };
     }
-    for (const pid of potRec['eligiblePlayerIds']) {
-      if (typeof pid === 'string') {
-        eligiblePlayers.add(pid);
+    for (const award of awards) {
+      if (!isPlainRecord(award)) {
+        return { ok: false, reason: 'Invalid award entry in potAwards' };
       }
+      const awardKeyErr = checkAllowedKeys(award, ALLOWED_AWARD_KEYS, 'potAwards.awards entry');
+      if (awardKeyErr !== null) {
+        return { ok: false, reason: awardKeyErr };
+      }
+      if (!isNonEmptyString(award['playerId']) || !isNonNegativeInt(award['amount'])) {
+        return { ok: false, reason: 'Malformed award fields in potAwards' };
+      }
+    }
+    for (const pid of eligibleIds) {
+      eligiblePlayers.add(pid);
     }
   }
 
-  for (const [playerId, pair] of Object.entries(revealedRec)) {
+  for (const [playerId, pair] of Object.entries(revealed)) {
     if (!eligiblePlayers.has(playerId)) {
       return {
         ok: false,
         reason: `Unrevealed/folded player "${playerId}" must not appear in revealedShowdownCards`,
       };
     }
-    if (!Array.isArray(pair) || pair.length !== 2 || !isValidCard(pair[0]) || !isValidCard(pair[1])) {
+    if (
+      !Array.isArray(pair) ||
+      pair.length !== 2 ||
+      Object.keys(pair).length !== 2 ||
+      !isValidCard(pair[0]) ||
+      !isValidCard(pair[1])
+    ) {
       return {
         ok: false,
         reason: `Invalid hole card pair for revealed player "${playerId}"`,

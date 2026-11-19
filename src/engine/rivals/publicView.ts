@@ -23,6 +23,14 @@ import type {
 
 const VALID_SUITS: ReadonlySet<string> = new Set<Suit>(['s', 'h', 'd', 'c']);
 const VALID_STREETS: ReadonlySet<string> = new Set<Street>(['preflop', 'flop', 'turn', 'river']);
+const VALID_PLAYER_STATUSES: ReadonlySet<string> = new Set(['active', 'folded', 'all-in']);
+const VALID_OOT_CANCEL_REASONS: ReadonlySet<string> = new Set([
+  'bet-changed',
+  'action-no-longer-legal',
+  'street-ended',
+  'hand-ended',
+]);
+const VALID_TILT_REASONS: ReadonlySet<string> = new Set(['big-pot-loss', 'turn-bad-beat']);
 const STREET_ORDER: Readonly<Record<Street, number>> = Object.freeze({
   preflop: 0,
   flop: 1,
@@ -36,7 +44,7 @@ const EXPECTED_BOARD_LENGTH: Readonly<Record<Street, number>> = Object.freeze({
   river: 5,
 });
 
-const FORBIDDEN_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
+const FORBIDDEN_HIDDEN_KEYS: ReadonlySet<string> = new Set([
   'deck',
   'deckCursor',
   'outcome',
@@ -46,6 +54,11 @@ const FORBIDDEN_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   'settledTransfers',
   'rngSeed',
   'phase',
+  'holeCards',
+  'unsettledContribution',
+  'undealt',
+  'resolution',
+  'evaluatedHands',
 ]);
 
 const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
@@ -69,6 +82,13 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   'tiltState',
 ]);
 
+const ALLOWED_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  'enablePreflopBetting',
+  'preflopCap',
+  'allowOutOfTurn',
+  'dealerIndex',
+]);
+
 const ALLOWED_PUBLIC_SEAT_KEYS: ReadonlySet<string> = new Set([
   'seatIndex',
   'playerId',
@@ -81,13 +101,78 @@ const ALLOWED_PUBLIC_SEAT_KEYS: ReadonlySet<string> = new Set([
   'cancelledDeclarationThisStreet',
 ]);
 
-const FORBIDDEN_EVENT_KEYS: ReadonlySet<string> = new Set([
-  'holeCards',
-  'deck',
-  'undealt',
-  'resolution',
-  'evaluatedHands',
+const ALLOWED_DECLARATION_KEYS: ReadonlySet<string> = new Set([
+  'playerId',
+  'street',
+  'action',
+  'declaredAtCurrentBet',
+  'reservedChips',
 ]);
+
+const ALLOWED_LEGAL_ACTIONS_KEYS: ReadonlySet<string> = new Set([
+  'playerId',
+  'street',
+  'streetCap',
+  'currentBet',
+  'playerStreetContribution',
+  'toCall',
+  'canFold',
+  'canCheck',
+  'canBet',
+  'betRange',
+  'canCall',
+  'callAmount',
+  'isCallAllIn',
+  'canRaise',
+  'raiseRange',
+]);
+
+const ALLOWED_AMOUNT_RANGE_KEYS: ReadonlySet<string> = new Set(['min', 'max', 'step']);
+
+const ALLOWED_TILT_STATE_KEYS: ReadonlySet<string> = new Set([
+  'isTilted',
+  'handsRemaining',
+  'totalTiltDuration',
+  'triggerReason',
+]);
+
+const ALLOWED_TIMELINE_EVENT_KEYS: Readonly<
+  Record<PublicTimelineEvent['type'], ReadonlySet<string>>
+> = Object.freeze({
+  'ante-collected': new Set(['type', 'antePerPlayer', 'playerIds', 'allInPlayerIds']),
+  'cards-dealt': new Set(['type', 'dealerPlayerId', 'openerPlayerId', 'playerIds']),
+  'street-dealt': new Set(['type', 'street', 'cards']),
+  'out-of-turn-declared': new Set([
+    'type',
+    'street',
+    'playerId',
+    'action',
+    'declaredAtCurrentBet',
+    'reservedChips',
+  ]),
+  'out-of-turn-cancelled': new Set([
+    'type',
+    'street',
+    'playerId',
+    'action',
+    'reason',
+    'triggeredByPlayerId',
+    'returnedChips',
+  ]),
+  'player-action': new Set([
+    'type',
+    'street',
+    'playerId',
+    'action',
+    'addedAmount',
+    'newStreetContribution',
+    'newCurrentBet',
+    'isAllIn',
+    'fromOutOfTurn',
+  ]),
+  'chip-exchange': new Set(['type', 'street', 'fromPlayerId', 'target', 'give', 'receive']),
+  'uncalled-refund': new Set(['type', 'street', 'playerId', 'amount', 'chips']),
+});
 
 function cloneCard(card: Card): Card {
   return Object.freeze({ rank: card.rank, suit: card.suit });
@@ -448,6 +533,42 @@ function countOwnKeys(obj: Record<string, unknown>): number {
   return count;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isNonNegativeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function isPositiveInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every(isNonEmptyString);
+}
+
+function isNonEmptyStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isNonEmptyString);
+}
+
+function findDisallowedKeyReason(
+  obj: Record<string, unknown>,
+  allowedKeys: ReadonlySet<string>,
+  context: string,
+): string | null {
+  for (const key of Object.keys(obj)) {
+    if (!allowedKeys.has(key)) {
+      if (FORBIDDEN_HIDDEN_KEYS.has(key)) {
+        return `Forbidden hidden field "${key}" present on ${context}`;
+      }
+      return `Unexpected field "${key}" present on ${context}`;
+    }
+  }
+  return null;
+}
+
 function isValidCardObject(value: unknown): value is Card {
   if (!isPlainRecord(value)) {
     return false;
@@ -479,18 +600,10 @@ function isValidChipsObject(value: unknown): value is ChipCounts {
   const c50 = value['50'];
   const c100 = value['100'];
   return (
-    typeof c5 === 'number' &&
-    Number.isInteger(c5) &&
-    c5 >= 0 &&
-    typeof c10 === 'number' &&
-    Number.isInteger(c10) &&
-    c10 >= 0 &&
-    typeof c50 === 'number' &&
-    Number.isInteger(c50) &&
-    c50 >= 0 &&
-    typeof c100 === 'number' &&
-    Number.isInteger(c100) &&
-    c100 >= 0
+    isNonNegativeInt(c5) &&
+    isNonNegativeInt(c10) &&
+    isNonNegativeInt(c50) &&
+    isNonNegativeInt(c100)
   );
 }
 
@@ -509,22 +622,137 @@ function isValidBettingActionObject(value: unknown): value is BettingAction {
     case 'bet':
       return (
         keyCount === 3 &&
-        typeof value['amount'] === 'number' &&
-        Number.isInteger(value['amount']) &&
-        value['amount'] > 0 &&
+        isPositiveInt(value['amount']) &&
         isValidChipsObject(value['chips'])
       );
     case 'raise':
       return (
         keyCount === 3 &&
-        typeof value['raiseTo'] === 'number' &&
-        Number.isInteger(value['raiseTo']) &&
-        value['raiseTo'] > 0 &&
+        isPositiveInt(value['raiseTo']) &&
         isValidChipsObject(value['chips'])
       );
     default:
       return false;
   }
+}
+
+function isValidExchangeTargetObject(value: unknown): value is ExchangeTarget {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const kind = value['kind'];
+  const keyCount = countOwnKeys(value);
+  if (kind === 'pot') {
+    return keyCount === 1;
+  }
+  if (kind === 'player') {
+    return keyCount === 2 && isNonEmptyString(value['playerId']);
+  }
+  return false;
+}
+
+function validateAmountRangeObject(value: unknown, label: string): string | null {
+  if (!isPlainRecord(value)) {
+    return `${label} must be a plain object`;
+  }
+  const keyErr = findDisallowedKeyReason(value, ALLOWED_AMOUNT_RANGE_KEYS, label);
+  if (keyErr !== null) {
+    return keyErr;
+  }
+  const min = value['min'];
+  const max = value['max'];
+  const step = value['step'];
+  if (!isPositiveInt(min) || !isPositiveInt(max) || max < min || step !== BET_STEP) {
+    return `Invalid ${label} bounds or step`;
+  }
+  return null;
+}
+
+function validateLegalActionsObject(
+  value: unknown,
+  expectedStreet: Street,
+): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (!isPlainRecord(value)) {
+    return 'legalActions must be null or a plain object';
+  }
+  const keyErr = findDisallowedKeyReason(value, ALLOWED_LEGAL_ACTIONS_KEYS, 'legalActions');
+  if (keyErr !== null) {
+    return keyErr;
+  }
+  if (
+    !isNonEmptyString(value['playerId']) ||
+    value['street'] !== expectedStreet ||
+    !isPositiveInt(value['streetCap']) ||
+    !isNonNegativeInt(value['currentBet']) ||
+    !isNonNegativeInt(value['playerStreetContribution']) ||
+    !isNonNegativeInt(value['toCall']) ||
+    typeof value['canFold'] !== 'boolean' ||
+    typeof value['canCheck'] !== 'boolean' ||
+    typeof value['canBet'] !== 'boolean' ||
+    typeof value['canCall'] !== 'boolean' ||
+    typeof value['isCallAllIn'] !== 'boolean' ||
+    typeof value['canRaise'] !== 'boolean'
+  ) {
+    return 'Invalid primitive field in legalActions';
+  }
+
+  if (value['canBet']) {
+    const betRangeErr = validateAmountRangeObject(value['betRange'], 'legalActions.betRange');
+    if (betRangeErr !== null) {
+      return betRangeErr;
+    }
+  } else if (value['betRange'] !== null) {
+    return 'legalActions.betRange must be null when canBet is false';
+  }
+
+  if (value['canCall']) {
+    if (!isPositiveInt(value['callAmount'])) {
+      return 'legalActions.callAmount must be a positive integer when canCall is true';
+    }
+  } else if (value['callAmount'] !== null) {
+    return 'legalActions.callAmount must be null when canCall is false';
+  }
+
+  if (value['canRaise']) {
+    const raiseRangeErr = validateAmountRangeObject(
+      value['raiseRange'],
+      'legalActions.raiseRange',
+    );
+    if (raiseRangeErr !== null) {
+      return raiseRangeErr;
+    }
+  } else if (value['raiseRange'] !== null) {
+    return 'legalActions.raiseRange must be null when canRaise is false';
+  }
+
+  return null;
+}
+
+function validateTiltStateObject(value: unknown): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (!isPlainRecord(value)) {
+    return 'tiltState must be a plain object when provided';
+  }
+  const keyErr = findDisallowedKeyReason(value, ALLOWED_TILT_STATE_KEYS, 'tiltState');
+  if (keyErr !== null) {
+    return keyErr;
+  }
+  const triggerReason = value['triggerReason'];
+  if (
+    typeof value['isTilted'] !== 'boolean' ||
+    !isNonNegativeInt(value['handsRemaining']) ||
+    !isNonNegativeInt(value['totalTiltDuration']) ||
+    (triggerReason !== null &&
+      (typeof triggerReason !== 'string' || !VALID_TILT_REASONS.has(triggerReason)))
+  ) {
+    return 'Invalid field in tiltState';
+  }
+  return null;
 }
 
 function cardKey(card: Card): string {
@@ -541,26 +769,16 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
     return { ok: false, reason: 'Decision input must be a non-null plain object' };
   }
 
-  for (const key of Object.keys(input)) {
-    if (FORBIDDEN_TOP_LEVEL_KEYS.has(key)) {
-      return {
-        ok: false,
-        reason: `Forbidden hidden field "${key}" present on RivalDecisionInput`,
-      };
-    }
-    if (!ALLOWED_TOP_LEVEL_KEYS.has(key)) {
-      return {
-        ok: false,
-        reason: `Unexpected field "${key}" present on RivalDecisionInput`,
-      };
-    }
+  const topKeyErr = findDisallowedKeyReason(input, ALLOWED_TOP_LEVEL_KEYS, 'RivalDecisionInput');
+  if (topKeyErr !== null) {
+    return { ok: false, reason: topKeyErr };
   }
 
   if (!isRivalId(input['rivalId'])) {
     return { ok: false, reason: `Invalid rivalId: ${String(input['rivalId'])}` };
   }
 
-  if (typeof input['playerId'] !== 'string' || input['playerId'].length === 0) {
+  if (!isNonEmptyString(input['playerId'])) {
     return { ok: false, reason: 'playerId must be a non-empty string' };
   }
 
@@ -608,24 +826,53 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
     seenCards.add(key);
   }
 
-  if (
-    typeof input['streetCap'] !== 'number' ||
-    !Number.isInteger(input['streetCap']) ||
-    input['streetCap'] <= 0
-  ) {
+  if (!isPositiveInt(input['streetCap'])) {
     return { ok: false, reason: 'streetCap must be a positive integer' };
   }
 
-  if (
-    typeof input['currentBet'] !== 'number' ||
-    !Number.isInteger(input['currentBet']) ||
-    input['currentBet'] < 0
-  ) {
+  if (!isNonNegativeInt(input['currentBet'])) {
     return { ok: false, reason: 'currentBet must be a non-negative integer' };
   }
 
   if (!isValidChipsObject(input['pot'])) {
     return { ok: false, reason: 'pot must be a valid ChipCounts object' };
+  }
+
+  if (input['activePlayerId'] !== null && !isNonEmptyString(input['activePlayerId'])) {
+    return { ok: false, reason: 'activePlayerId must be null or a non-empty string' };
+  }
+
+  if (!isNonEmptyString(input['openerPlayerId'])) {
+    return { ok: false, reason: 'openerPlayerId must be a non-empty string' };
+  }
+
+  if (!isNonEmptyString(input['dealerPlayerId'])) {
+    return { ok: false, reason: 'dealerPlayerId must be a non-empty string' };
+  }
+
+  if (typeof input['isMyTurn'] !== 'boolean') {
+    return { ok: false, reason: 'isMyTurn must be a boolean' };
+  }
+
+  if (typeof input['allowOutOfTurn'] !== 'boolean') {
+    return { ok: false, reason: 'allowOutOfTurn must be a boolean' };
+  }
+
+  const config = input['config'];
+  if (!isPlainRecord(config)) {
+    return { ok: false, reason: 'config must be a non-null plain object' };
+  }
+  const configKeyErr = findDisallowedKeyReason(config, ALLOWED_CONFIG_KEYS, 'config');
+  if (configKeyErr !== null) {
+    return { ok: false, reason: configKeyErr };
+  }
+  if (
+    typeof config['enablePreflopBetting'] !== 'boolean' ||
+    !isPositiveInt(config['preflopCap']) ||
+    typeof config['allowOutOfTurn'] !== 'boolean' ||
+    !isNonNegativeInt(config['dealerIndex'])
+  ) {
+    return { ok: false, reason: 'Invalid field in config' };
   }
 
   const publicSeats = input['publicSeats'];
@@ -638,35 +885,46 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
     if (!isPlainRecord(seat)) {
       return { ok: false, reason: 'Each publicSeat must be an object' };
     }
-    for (const key of Object.keys(seat)) {
-      if (key === 'holeCards' || key === 'unsettledContribution') {
-        return {
-          ok: false,
-          reason: `Forbidden private field "${key}" found in publicSeats entry`,
-        };
-      }
-      if (!ALLOWED_PUBLIC_SEAT_KEYS.has(key)) {
-        return {
-          ok: false,
-          reason: `Unexpected field "${key}" found in publicSeats entry`,
-        };
-      }
+    const seatKeyErr = findDisallowedKeyReason(seat, ALLOWED_PUBLIC_SEAT_KEYS, 'publicSeats entry');
+    if (seatKeyErr !== null) {
+      return { ok: false, reason: seatKeyErr };
     }
-    if (typeof seat['playerId'] !== 'string' || !isValidChipsObject(seat['stack'])) {
-      return { ok: false, reason: 'Invalid playerId or stack in publicSeats entry' };
+    if (
+      !isNonNegativeInt(seat['seatIndex']) ||
+      !isNonEmptyString(seat['playerId']) ||
+      !isValidChipsObject(seat['stack']) ||
+      typeof seat['status'] !== 'string' ||
+      !VALID_PLAYER_STATUSES.has(seat['status']) ||
+      !isNonNegativeInt(seat['streetContribution']) ||
+      !isNonNegativeInt(seat['totalContribution']) ||
+      typeof seat['hasActedThisStreet'] !== 'boolean' ||
+      typeof seat['cancelledDeclarationThisStreet'] !== 'boolean'
+    ) {
+      return { ok: false, reason: 'Invalid field in publicSeats entry' };
     }
     if (seat['playerId'] === input['playerId']) {
       foundActorSeat = true;
     }
     const decl = seat['declaration'];
     if (decl !== null) {
+      if (!isPlainRecord(decl)) {
+        return { ok: false, reason: 'Invalid out-of-turn declaration on publicSeat' };
+      }
+      const declKeyErr = findDisallowedKeyReason(
+        decl,
+        ALLOWED_DECLARATION_KEYS,
+        'publicSeats.declaration',
+      );
+      if (declKeyErr !== null) {
+        return { ok: false, reason: declKeyErr };
+      }
       if (
-        !isPlainRecord(decl) ||
-        typeof decl['playerId'] !== 'string' ||
+        !isNonEmptyString(decl['playerId']) ||
         typeof decl['street'] !== 'string' ||
         !VALID_STREETS.has(decl['street']) ||
+        decl['street'] !== typedStreet ||
         !isValidBettingActionObject(decl['action']) ||
-        typeof decl['declaredAtCurrentBet'] !== 'number' ||
+        !isNonNegativeInt(decl['declaredAtCurrentBet']) ||
         !isValidChipsObject(decl['reservedChips'])
       ) {
         return { ok: false, reason: 'Invalid out-of-turn declaration on publicSeat' };
@@ -687,21 +945,33 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
     if (!isPlainRecord(event)) {
       return { ok: false, reason: 'Timeline event must be an object' };
     }
-    for (const key of Object.keys(event)) {
-      if (FORBIDDEN_EVENT_KEYS.has(key)) {
-        return {
-          ok: false,
-          reason: `Forbidden field "${key}" found in publicTimeline event`,
-        };
-      }
-    }
     const eventType = event['type'];
+    if (
+      typeof eventType !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(ALLOWED_TIMELINE_EVENT_KEYS, eventType)
+    ) {
+      return {
+        ok: false,
+        reason: `Forbidden or unknown timeline event type "${String(eventType)}" in publicTimeline`,
+      };
+    }
+    const allowedEventKeys =
+      ALLOWED_TIMELINE_EVENT_KEYS[eventType as PublicTimelineEvent['type']];
+    const eventKeyErr = findDisallowedKeyReason(
+      event,
+      allowedEventKeys,
+      `publicTimeline ${eventType} event`,
+    );
+    if (eventKeyErr !== null) {
+      return { ok: false, reason: eventKeyErr };
+    }
+
     switch (eventType) {
       case 'ante-collected':
         if (
-          typeof event['antePerPlayer'] !== 'number' ||
-          !Array.isArray(event['playerIds']) ||
-          !Array.isArray(event['allInPlayerIds'])
+          !isPositiveInt(event['antePerPlayer']) ||
+          !isNonEmptyStringArray(event['playerIds']) ||
+          !isStringArray(event['allInPlayerIds'])
         ) {
           return { ok: false, reason: 'Invalid ante-collected timeline event' };
         }
@@ -709,9 +979,9 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
 
       case 'cards-dealt':
         if (
-          typeof event['dealerPlayerId'] !== 'string' ||
-          typeof event['openerPlayerId'] !== 'string' ||
-          !Array.isArray(event['playerIds'])
+          !isNonEmptyString(event['dealerPlayerId']) ||
+          !isNonEmptyString(event['openerPlayerId']) ||
+          !isNonEmptyStringArray(event['playerIds'])
         ) {
           return { ok: false, reason: 'Invalid cards-dealt timeline event' };
         }
@@ -761,9 +1031,9 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
           typeof event['street'] !== 'string' ||
           !VALID_STREETS.has(event['street']) ||
           STREET_ORDER[event['street'] as Street] > STREET_ORDER[typedStreet] ||
-          typeof event['playerId'] !== 'string' ||
+          !isNonEmptyString(event['playerId']) ||
           !isValidBettingActionObject(event['action']) ||
-          typeof event['declaredAtCurrentBet'] !== 'number' ||
+          !isNonNegativeInt(event['declaredAtCurrentBet']) ||
           !isValidChipsObject(event['reservedChips'])
         ) {
           return { ok: false, reason: 'Invalid out-of-turn-declared timeline event' };
@@ -775,9 +1045,12 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
           typeof event['street'] !== 'string' ||
           !VALID_STREETS.has(event['street']) ||
           STREET_ORDER[event['street'] as Street] > STREET_ORDER[typedStreet] ||
-          typeof event['playerId'] !== 'string' ||
+          !isNonEmptyString(event['playerId']) ||
           !isValidBettingActionObject(event['action']) ||
           typeof event['reason'] !== 'string' ||
+          !VALID_OOT_CANCEL_REASONS.has(event['reason']) ||
+          (event['triggeredByPlayerId'] !== undefined &&
+            !isNonEmptyString(event['triggeredByPlayerId'])) ||
           !isValidChipsObject(event['returnedChips'])
         ) {
           return { ok: false, reason: 'Invalid out-of-turn-cancelled timeline event' };
@@ -789,11 +1062,11 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
           typeof event['street'] !== 'string' ||
           !VALID_STREETS.has(event['street']) ||
           STREET_ORDER[event['street'] as Street] > STREET_ORDER[typedStreet] ||
-          typeof event['playerId'] !== 'string' ||
+          !isNonEmptyString(event['playerId']) ||
           !isValidBettingActionObject(event['action']) ||
-          typeof event['addedAmount'] !== 'number' ||
-          typeof event['newStreetContribution'] !== 'number' ||
-          typeof event['newCurrentBet'] !== 'number' ||
+          !isNonNegativeInt(event['addedAmount']) ||
+          !isNonNegativeInt(event['newStreetContribution']) ||
+          !isNonNegativeInt(event['newCurrentBet']) ||
           typeof event['isAllIn'] !== 'boolean' ||
           typeof event['fromOutOfTurn'] !== 'boolean'
         ) {
@@ -805,12 +1078,21 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
         if (
           (event['street'] !== null &&
             (typeof event['street'] !== 'string' || !VALID_STREETS.has(event['street']))) ||
-          typeof event['fromPlayerId'] !== 'string' ||
-          !isPlainRecord(event['target']) ||
+          !isNonEmptyString(event['fromPlayerId']) ||
+          !isValidExchangeTargetObject(event['target']) ||
           !isValidChipsObject(event['give']) ||
           !isValidChipsObject(event['receive'])
         ) {
           return { ok: false, reason: 'Invalid chip-exchange timeline event' };
+        }
+        if (
+          event['street'] !== null &&
+          STREET_ORDER[event['street'] as Street] > STREET_ORDER[typedStreet]
+        ) {
+          return {
+            ok: false,
+            reason: `publicTimeline contains future chip-exchange "${event['street']}" while on "${typedStreet}"`,
+          };
         }
         break;
 
@@ -818,20 +1100,30 @@ export function validateRivalDecisionInput(input: unknown): RivalValidationResul
         if (
           typeof event['street'] !== 'string' ||
           !VALID_STREETS.has(event['street']) ||
-          typeof event['playerId'] !== 'string' ||
-          typeof event['amount'] !== 'number' ||
+          !isNonEmptyString(event['playerId']) ||
+          !isPositiveInt(event['amount']) ||
           !isValidChipsObject(event['chips'])
         ) {
           return { ok: false, reason: 'Invalid uncalled-refund timeline event' };
         }
+        if (STREET_ORDER[event['street'] as Street] > STREET_ORDER[typedStreet]) {
+          return {
+            ok: false,
+            reason: `publicTimeline contains future uncalled-refund "${event['street']}" while on "${typedStreet}"`,
+          };
+        }
         break;
-
-      default:
-        return {
-          ok: false,
-          reason: `Forbidden or unknown timeline event type "${String(eventType)}" in publicTimeline`,
-        };
     }
+  }
+
+  const legalActionsErr = validateLegalActionsObject(input['legalActions'], typedStreet);
+  if (legalActionsErr !== null) {
+    return { ok: false, reason: legalActionsErr };
+  }
+
+  const tiltStateErr = validateTiltStateObject(input['tiltState']);
+  if (tiltStateErr !== null) {
+    return { ok: false, reason: tiltStateErr };
   }
 
   return { ok: true };

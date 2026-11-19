@@ -88,6 +88,7 @@ export function inferPublicActionFromTimeline(
         ...(act.type === 'bet' ? { amount: act.amount } : {}),
         ...(act.type === 'raise' ? { raiseTo: act.raiseTo } : {}),
         fromOutOfTurn: true,
+        isCheckRaise: act.type === 'raise' && sawCheckEarlier,
       };
     } else if (event.type === 'player-action' && event.street === street && event.playerId === playerId) {
       const act = event.action;
@@ -105,6 +106,13 @@ export function inferPublicActionFromTimeline(
   }
 
   return lastAction;
+}
+
+function resolveIsCheckRaise(rivalId: RivalId, action: PublicActionDescriptor): boolean {
+  if (action.type !== 'raise') {
+    return false;
+  }
+  return action.isCheckRaise !== undefined ? action.isCheckRaise : rivalId === 'bay';
 }
 
 function computeComboWeight(
@@ -177,7 +185,7 @@ function computeComboWeight(
     case 'bet':
     case 'raise': {
       const isRaise = action.type === 'raise';
-      const isCheckRaise = Boolean(action.isCheckRaise) || (isRaise && rivalId === 'bay');
+      const isCheckRaise = resolveIsCheckRaise(rivalId, action);
 
       if (isCheckRaise) {
         // Check-raise range is heavily polarized toward strong made hands and high-equity draws
@@ -255,7 +263,7 @@ function buildRangeDescriptionVi(
       : action.type === 'bet'
         ? `bet ${action.amount ?? ''}`.trim()
         : action.type === 'raise'
-          ? action.isCheckRaise
+          ? resolveIsCheckRaise(rivalId, action)
             ? `check-raise lên ${action.raiseTo ?? ''}`.trim()
             : `raise lên ${action.raiseTo ?? ''}`.trim()
           : action.type;
@@ -298,7 +306,7 @@ function buildAssumptionsVi(
       effectiveAction.type === 'bet'
         ? `bet ${effectiveAction.amount ?? ''}`.trim()
         : effectiveAction.type === 'raise'
-          ? `${effectiveAction.isCheckRaise ? 'check-raise' : 'raise'} lên ${effectiveAction.raiseTo ?? ''}`.trim()
+          ? `${resolveIsCheckRaise(input.rivalId, effectiveAction) ? 'check-raise' : 'raise'} lên ${effectiveAction.raiseTo ?? ''}`.trim()
           : effectiveAction.type;
     const ootNote = effectiveAction.fromOutOfTurn ? ' (có hô sớm trước lượt)' : '';
     notes.push(`Hành động công khai: ${actDetail}${ootNote}.`);
@@ -405,8 +413,8 @@ export function estimateRivalRange(input: EstimateRivalRangeInput): RivalRangeEs
     }
   }
 
-  // Ensure non-empty range even for extreme actions (except explicit fold where top hands are kept minimal)
-  if (combos.length === 0 && fallbackCombos.length > 0) {
+  // Ensure non-empty range for live actions; a folded opponent has an empty live range.
+  if (effectiveAction?.type !== 'fold' && combos.length === 0 && fallbackCombos.length > 0) {
     fallbackCombos.sort((a, b) => b.score - a.score);
     const topSlice = fallbackCombos.slice(0, Math.min(12, fallbackCombos.length));
     for (const item of topSlice) {

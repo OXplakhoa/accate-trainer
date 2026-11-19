@@ -527,5 +527,28 @@ describe('P2b rivals — Nóng tilt triggers, public state, and 3–5 hand count
     expect(evaluateNongTiltTrigger(plainObjectSummary, 'constructor').triggered).toBe(false);
     expect(evaluateNongTiltTrigger(plainObjectSummary, '__proto__').triggered).toBe(false);
     expect(evaluateNongTiltTrigger(plainObjectSummary, 'nong').triggered).toBe(false);
+
+    // Reject extra hidden keys (e.g. deck, seats, or extra potAward fields) on PublicHandResultSummary
+    const summaryWithDeck = { ...battleSummary, deck: battleHand.deck };
+    expect(validatePublicHandResultSummary(summaryWithDeck)).toEqual({
+      ok: false,
+      reason: expect.stringContaining('deck'),
+    });
+    expect(() =>
+      evaluateNongTiltTrigger(summaryWithDeck as unknown as PublicHandResultSummary),
+    ).toThrow(/deck/);
+    expect(() =>
+      updateNongTiltStateAtBoundary(
+        createInitialNongTiltState(),
+        summaryWithDeck as unknown as PublicHandResultSummary,
+        createRng('reject-summary-deck'),
+      ),
+    ).toThrow(/deck/);
+
+    const summaryWithPotExtra = {
+      ...battleSummary,
+      potAwards: battleSummary.potAwards.map((p) => ({ ...p, deck: battleHand.deck })),
+    };
+    expect(validatePublicHandResultSummary(summaryWithPotExtra).ok).toBe(false);
   });
 });

@@ -258,4 +258,112 @@ describe('P2b rivals — profiles, seat metadata, and table selection (B3, B4)',
       expect(invalidSeats.code).toBe('invalid-seat-indices');
     }
   });
+
+  it('B4 regression: validates totalPlayers whenever supplied, rejects rivalCount exceeding available non-hero seats, and preserves subsets/sparse indices with 1:1 assignments', () => {
+    // 1. Exact reproduction: rivalCount=5 with totalPlayers=4 must error, not return 5 IDs with 3 assignments
+    const tooManyForTable = selectRivalsForTable({
+      rng: createRng('s1'),
+      rivalCount: 5,
+      totalPlayers: 4,
+    });
+    expect(tooManyForTable.ok).toBe(false);
+    if (!tooManyForTable.ok) {
+      expect(tooManyForTable.code).toBe('invalid-seat-count');
+    }
+
+    // 2. Explicit seatIndices count > totalPlayers - 1 must also error
+    const tooManyExplicitIndices = selectRivalsForTable({
+      rng: createRng('s1-explicit-overflow'),
+      totalPlayers: 4,
+      seatIndices: [1, 2, 3, 4],
+    });
+    expect(tooManyExplicitIndices.ok).toBe(false);
+    if (!tooManyExplicitIndices.ok) {
+      expect(tooManyExplicitIndices.code).toBe('invalid-seat-count');
+    }
+
+    // 3. Invalid totalPlayers (outside 4..10 or non-integer) must error even when rivalCount or seatIndices is supplied
+    for (const badTotal of [3, 11, 4.5]) {
+      const badWithRivalCount = selectRivalsForTable({
+        rng: createRng('s1-bad-total'),
+        rivalCount: 2,
+        totalPlayers: badTotal,
+      });
+      expect(badWithRivalCount.ok).toBe(false);
+      if (!badWithRivalCount.ok) {
+        expect(badWithRivalCount.code).toBe('invalid-seat-count');
+      }
+
+      const badWithIndices = selectRivalsForTable({
+        rng: createRng('s1-bad-total-idx'),
+        seatIndices: [1, 2],
+        totalPlayers: badTotal,
+      });
+      expect(badWithIndices.ok).toBe(false);
+      if (!badWithIndices.ok) {
+        expect(badWithIndices.code).toBe('invalid-seat-count');
+      }
+    }
+
+    // 4. Preserve smaller requested subset (rivalCount < totalPlayers - 1)
+    const smallerSubset = selectRivalsForTable({
+      rng: createRng('s1-smaller-subset'),
+      rivalCount: 3,
+      totalPlayers: 6,
+      heroSeatIndex: 1,
+    });
+    expect(smallerSubset.ok).toBe(true);
+    if (!smallerSubset.ok) throw new Error(smallerSubset.message);
+    expect(smallerSubset.rivalIds).toHaveLength(3);
+    expect(smallerSubset.assignments).toHaveLength(3);
+    expect(smallerSubset.assignments.map((a) => a.seatIndex)).toEqual([0, 2, 3]);
+
+    // 5. Preserve selection with only rivalCount
+    const onlyCount = selectRivalsForTable({
+      rng: createRng('s1-only-count'),
+      rivalCount: 4,
+    });
+    expect(onlyCount.ok).toBe(true);
+    if (!onlyCount.ok) throw new Error(onlyCount.message);
+    expect(onlyCount.rivalIds).toHaveLength(4);
+    expect(onlyCount.assignments).toHaveLength(4);
+    expect(onlyCount.assignments.map((a) => a.seatIndex)).toEqual([1, 2, 3, 4]);
+
+    // 6. Preserve valid explicit physical seat indices for sparse tables and verify INV-1/INV-2 on a real hand
+    const sparseSeats = selectRivalsForTable({
+      rng: createRng('s1-sparse-seats'),
+      totalPlayers: 4,
+      rivalCount: 3,
+      seatIndices: [2, 5, 9],
+      heroSeatIndex: 0,
+    });
+    expect(sparseSeats.ok).toBe(true);
+    if (!sparseSeats.ok) throw new Error(sparseSeats.message);
+    expect(sparseSeats.rivalIds).toHaveLength(3);
+    expect(sparseSeats.assignments).toHaveLength(3);
+    expect(sparseSeats.assignments.map((a) => a.seatIndex)).toEqual([2, 5, 9]);
+    expect(sparseSeats.assignments.map((a) => a.rivalId)).toEqual([...sparseSeats.rivalIds]);
+
+    const dist4 = initialDistribution(4);
+    expect(checkInv1([dist4.bank, ...Array.from({ length: 4 }, () => dist4.perPlayer)])).toEqual({
+      ok: true,
+    });
+    const sparseHand = startHand({
+      seats: [
+        { seatIndex: 0, playerId: 'hero', stack: dist4.perPlayer },
+        ...sparseSeats.assignments.map((a) => ({
+          seatIndex: a.seatIndex,
+          playerId: a.rivalId,
+          stack: dist4.perPlayer,
+        })),
+      ],
+      bank: dist4.bank,
+      rng: createRng('s1-sparse-hand'),
+    });
+    expect(sparseHand.ok).toBe(true);
+    if (!sparseHand.ok) throw new Error(sparseHand.message);
+    const inv = checkHandInvariants(sparseHand.state);
+    expect(inv.inv1).toEqual({ ok: true });
+    expect(inv.inv2.ok).toBe(true);
+  });
 });

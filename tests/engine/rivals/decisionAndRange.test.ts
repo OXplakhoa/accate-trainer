@@ -17,7 +17,10 @@ import {
   decideRivalOutOfTurn,
   estimateRivalRange,
   getRivalRangeCombos,
+  inferPublicActionFromTimeline,
   RIVAL_IDS,
+  summarizeCompletedHandForRivals,
+  validatePublicHandResultSummary,
   validateRivalDecisionInput,
   type NongTiltState,
   type RivalDecisionInput,
@@ -28,7 +31,9 @@ import {
   buildFixtureDeck,
   mustApply,
   mustDeclare,
+  mustExchange,
   mustStartHand,
+  raiseAction,
 } from '../handTestHelpers';
 
 describe('P2b rivals — information isolation, decision execution, out-of-turn, and range estimation (B1)', () => {
@@ -477,5 +482,356 @@ describe('P2b rivals — information isolation, decision execution, out-of-turn,
     expect(hand.seats.map((s) => s.stack)).toEqual(stacksBefore);
     expect(chipValue(hand.pot)).toBe(30);
     assertHandInvariants(hand);
+  });
+
+  it('B1 regression: enforces nested DTO shapes, rejects future refund/exchange and non-betting decideRivalAction calls, while accepting legitimate preflop/exchange/OOT/completed projections', () => {
+    const init = initialDistribution(4);
+    const playerIds = ['cao', 'soi', 'dien', 'tho'] as const;
+
+    // 1. Legitimate preflop DTO with OOT declaration + chip exchange passes validation and decision helpers
+    let preflopHand = mustStartHand({
+      seats: playerIds.map((playerId) => ({ playerId, stack: init.perPlayer })),
+      bank: init.bank,
+      rng: createRng('b1-fix2-preflop'),
+      config: { enablePreflopBetting: true, preflopCap: 30, allowOutOfTurn: true, dealerIndex: 3 },
+      fixtures: { openerId: 'cao' },
+    }).state;
+
+    // In-hand chip exchange on preflop (cao exchanges 1x50 for 5x10 with soi)
+    preflopHand = mustExchange(preflopHand, {
+      fromPlayerId: 'cao',
+      target: { kind: 'player', playerId: 'soi' },
+      give: { 5: 0, 10: 0, 50: 1, 100: 0 },
+      receive: { 5: 0, 10: 5, 50: 0, 100: 0 },
+    }).state;
+
+    // dien declares out-of-turn check on preflop
+    preflopHand = mustDeclare(preflopHand, 'dien', { type: 'check' }).state;
+
+    const preflopDto = buildRivalDecisionInput(preflopHand, 'cao', {
+      tiltState: createInitialNongTiltState(),
+    });
+    expect(validateRivalDecisionInput(preflopDto)).toEqual({ ok: true });
+    expect(() => decideRivalAction(preflopDto, createRng('b1-fix2-preflop-act'))).not.toThrow();
+
+    // OOT strategy helper on an active betting hand continues to work for an eligible seat ('soi')
+    const soiOotDto = buildRivalDecisionInput(preflopHand, 'soi');
+    expect(validateRivalDecisionInput(soiOotDto)).toEqual({ ok: true });
+    expect(() => decideRivalOutOfTurn(soiOotDto, createRng('b1-fix2-soi-oot'))).not.toThrow();
+
+    // 2. Legitimate flop DTO for nested rejection checks
+    const flopHand = mustStartHand({
+      seats: playerIds.map((playerId) => ({ playerId, stack: init.perPlayer })),
+      bank: init.bank,
+      rng: createRng('b1-fix2-flop'),
+      config: { dealerIndex: 3, allowOutOfTurn: true },
+      fixtures: { openerId: 'cao' },
+    }).state;
+    const cleanFlopDto = buildRivalDecisionInput(flopHand, 'cao');
+    expect(validateRivalDecisionInput(cleanFlopDto)).toEqual({ ok: true });
+
+    const sampleDeclaration = {
+      playerId: 'dien',
+      street: 'flop' as const,
+      action: { type: 'check' as const },
+      declaredAtCurrentBet: 0,
+      reservedChips: emptyChips(),
+    };
+
+    const invalidCases: Array<{ readonly label: string; readonly dto: unknown }> = [
+      {
+        label: 'config.deck hidden field',
+        dto: { ...cleanFlopDto, config: { ...cleanFlopDto.config, deck: flopHand.deck } },
+      },
+      {
+        label: 'missing config (no downstream TypeError)',
+        dto: { ...cleanFlopDto, config: undefined },
+      },
+      {
+        label: 'timeline event with extra seats',
+        dto: {
+          ...cleanFlopDto,
+          publicTimeline: [
+            ...cleanFlopDto.publicTimeline,
+            { ...cleanFlopDto.publicTimeline[0]!, seats: flopHand.seats },
+          ],
+        },
+      },
+      {
+        label: 'timeline event with extra outcome',
+        dto: {
+          ...cleanFlopDto,
+          publicTimeline: [
+            ...cleanFlopDto.publicTimeline,
+            { ...cleanFlopDto.publicTimeline[0]!, outcome: flopHand.outcome },
+          ],
+        },
+      },
+      {
+        label: 'future uncalled-refund on river while on flop',
+        dto: {
+          ...cleanFlopDto,
+          publicTimeline: [
+            ...cleanFlopDto.publicTimeline,
+            {
+              type: 'uncalled-refund',
+              street: 'river',
+              playerId: 'cao',
+              amount: 10,
+              chips: { 5: 0, 10: 1, 50: 0, 100: 0 },
+            },
+          ],
+        },
+      },
+      {
+        label: 'future chip-exchange on turn while on flop',
+        dto: {
+          ...cleanFlopDto,
+          publicTimeline: [
+            ...cleanFlopDto.publicTimeline,
+            {
+              type: 'chip-exchange',
+              street: 'turn',
+              fromPlayerId: 'cao',
+              target: { kind: 'pot' },
+              give: { 5: 0, 10: 1, 50: 0, 100: 0 },
+              receive: { 5: 2, 10: 0, 50: 0, 100: 0 },
+            },
+          ],
+        },
+      },
+      {
+        label: 'chip-exchange with invalid target extra key',
+        dto: {
+          ...cleanFlopDto,
+          publicTimeline: [
+            ...cleanFlopDto.publicTimeline,
+            {
+              type: 'chip-exchange',
+              street: 'flop',
+              fromPlayerId: 'cao',
+              target: { kind: 'pot', deck: flopHand.deck },
+              give: { 5: 0, 10: 1, 50: 0, 100: 0 },
+              receive: { 5: 2, 10: 0, 50: 0, 100: 0 },
+            },
+          ],
+        },
+      },
+      {
+        label: 'declaration.holeCards hidden field',
+        dto: {
+          ...cleanFlopDto,
+          publicSeats: cleanFlopDto.publicSeats.map((s) =>
+            s.playerId === 'dien'
+              ? {
+                  ...s,
+                  declaration: { ...sampleDeclaration, holeCards: flopHand.seats[2]!.holeCards },
+                }
+              : s,
+          ),
+        },
+      },
+      {
+        label: 'declaration future street',
+        dto: {
+          ...cleanFlopDto,
+          publicSeats: cleanFlopDto.publicSeats.map((s) =>
+            s.playerId === 'dien'
+              ? { ...s, declaration: { ...sampleDeclaration, street: 'turn' } }
+              : s,
+          ),
+        },
+      },
+      {
+        label: 'legalActions extra key',
+        dto: {
+          ...cleanFlopDto,
+          legalActions: { ...cleanFlopDto.legalActions!, deck: flopHand.deck },
+        },
+      },
+      {
+        label: 'legalActions.betRange extra key',
+        dto: {
+          ...cleanFlopDto,
+          legalActions: {
+            ...cleanFlopDto.legalActions!,
+            betRange: { ...cleanFlopDto.legalActions!.betRange!, extra: 1 },
+          },
+        },
+      },
+      {
+        label: 'tiltState extra key',
+        dto: {
+          ...cleanFlopDto,
+          tiltState: { ...createInitialNongTiltState(), deck: flopHand.deck },
+        },
+      },
+      {
+        label: 'missing required primitive flag isMyTurn',
+        dto: { ...cleanFlopDto, isMyTurn: undefined },
+      },
+    ];
+
+    for (const testCase of invalidCases) {
+      const res = validateRivalDecisionInput(testCase.dto);
+      expect(res.ok, testCase.label).toBe(false);
+      expect(() =>
+        decideRivalAction(testCase.dto as RivalDecisionInput, createRng('b1-fix2-reject')),
+      ).toThrow(/Invalid RivalDecisionInput/);
+      expect(() =>
+        decideRivalOutOfTurn(testCase.dto as RivalDecisionInput, createRng('b1-fix2-reject-oot')),
+      ).toThrow(/Invalid RivalDecisionInput/);
+    }
+
+    // 3. Completed hand: clean DTO has activePlayerId === null; decideRivalAction must reject it
+    let completedHand = mustApply(flopHand, 'cao', betAction(flopHand, 'cao', 10)).state;
+    completedHand = mustApply(completedHand, 'soi', { type: 'fold' }).state;
+    completedHand = mustApply(completedHand, 'dien', { type: 'fold' }).state;
+    completedHand = mustApply(completedHand, 'tho', { type: 'fold' }).state;
+    expect(completedHand.phase).toBe('complete');
+    assertHandInvariants(completedHand);
+
+    const completedDto = buildRivalDecisionInput(completedHand, 'cao');
+    expect(completedDto.activePlayerId).toBeNull();
+    expect(validateRivalDecisionInput(completedDto)).toEqual({ ok: true });
+    expect(() => decideRivalAction(completedDto, createRng('b1-fix2-completed'))).toThrow(
+      /activePlayerId is null/,
+    );
+    expect(decideRivalOutOfTurn(completedDto, createRng('b1-fix2-completed-oot')).action).toBeNull();
+
+    const completedSummary = summarizeCompletedHandForRivals(completedHand);
+    expect(validatePublicHandResultSummary(completedSummary)).toEqual({ ok: true });
+    expect(
+      validatePublicHandResultSummary({ ...completedSummary, deck: completedHand.deck }).ok,
+    ).toBe(false);
+  });
+
+  it('range regression: returns an empty range on fold and keeps explicit or inferred isCheckRaise:false for Bẫy as an ordinary raise', () => {
+    const init = initialDistribution(4);
+    const playerIds = ['soi', 'bay', 'tho', 'cao'] as const;
+    const deck = buildFixtureDeck({
+      playerIds,
+      dealerIndex: 3,
+      holeCardsByPlayer: {
+        soi: 'As Kd',
+        bay: '9s 9d',
+        tho: '4c 3d',
+        cao: 'Qc Jc',
+      },
+      board: '9h 7h 2c 5s Kc',
+    });
+
+    const baseHand = mustStartHand({
+      seats: playerIds.map((playerId) => ({ playerId, stack: init.perPlayer })),
+      bank: init.bank,
+      rng: createRng('range-fix2-hand'),
+      config: { dealerIndex: 3 },
+      fixtures: { deck, openerId: 'soi' },
+    }).state;
+
+    // Branch A: soi bets 10, bay raises to 30 directly (ordinary raise, no prior check), tho folds
+    let ordinaryRaiseHand = mustApply(baseHand, 'soi', betAction(baseHand, 'soi', 10)).state;
+    ordinaryRaiseHand = mustApply(
+      ordinaryRaiseHand,
+      'bay',
+      raiseAction(ordinaryRaiseHand, 'bay', 30),
+    ).state;
+    ordinaryRaiseHand = mustApply(ordinaryRaiseHand, 'tho', { type: 'fold' }).state;
+    assertHandInvariants(ordinaryRaiseHand);
+
+    // Branch B: soi checks, bay checks, tho bets 10, cao folds, soi folds, bay check-raises to 30
+    let checkRaiseHand = mustApply(baseHand, 'soi', { type: 'check' }).state;
+    checkRaiseHand = mustApply(checkRaiseHand, 'bay', { type: 'check' }).state;
+    checkRaiseHand = mustApply(checkRaiseHand, 'tho', betAction(checkRaiseHand, 'tho', 10)).state;
+    checkRaiseHand = mustApply(checkRaiseHand, 'cao', { type: 'fold' }).state;
+    checkRaiseHand = mustApply(checkRaiseHand, 'soi', { type: 'fold' }).state;
+    checkRaiseHand = mustApply(
+      checkRaiseHand,
+      'bay',
+      raiseAction(checkRaiseHand, 'bay', 30),
+    ).state;
+    assertHandInvariants(checkRaiseHand);
+
+    const ordinaryDto = buildRivalDecisionInput(ordinaryRaiseHand, 'cao');
+    const checkRaiseDto = buildRivalDecisionInput(checkRaiseHand, 'tho');
+    const board = ordinaryDto.board;
+
+    // 1. Fold must return an empty live-opponent range (both explicit action and inferred from timeline)
+    for (const rivalId of ['tho', 'da', 'bay', 'dien'] as const) {
+      const explicitFoldRange = estimateRivalRange({
+        rivalId,
+        board,
+        action: { type: 'fold' },
+      });
+      expect(explicitFoldRange.combos).toEqual([]);
+      expect(getRivalRangeCombos({ rivalId, board, action: { type: 'fold' } })).toEqual([]);
+    }
+
+    const inferredFoldAction = inferPublicActionFromTimeline(
+      ordinaryDto.publicTimeline,
+      'tho',
+      'flop',
+    );
+    expect(inferredFoldAction?.type).toBe('fold');
+    const timelineFoldRange = estimateRivalRange({
+      rivalId: 'tho',
+      playerId: 'tho',
+      board,
+      publicTimeline: ordinaryDto.publicTimeline,
+    });
+    expect(timelineFoldRange.combos).toEqual([]);
+
+    // 2. Bẫy with explicit isCheckRaise: false vs omitted isCheckRaise vs explicit isCheckRaise: true
+    const bayExplicitOrdinaryRaise = estimateRivalRange({
+      rivalId: 'bay',
+      board,
+      action: { type: 'raise', raiseTo: 30, isCheckRaise: false },
+    });
+    const bayOmittedCheckRaise = estimateRivalRange({
+      rivalId: 'bay',
+      board,
+      action: { type: 'raise', raiseTo: 30 },
+    });
+    const bayExplicitCheckRaise = estimateRivalRange({
+      rivalId: 'bay',
+      board,
+      action: { type: 'raise', raiseTo: 30, isCheckRaise: true },
+    });
+
+    // Omitting isCheckRaise on a raise for Bẫy applies the check-raise heuristic
+    expect(bayOmittedCheckRaise.combos).toEqual(bayExplicitCheckRaise.combos);
+    expect(bayOmittedCheckRaise.descriptionVi).toContain('check-raise lên 30');
+
+    // Explicit isCheckRaise: false must remain an ordinary raise (wider range than check-raise)
+    expect(bayExplicitOrdinaryRaise.combos.length).toBeGreaterThan(
+      bayExplicitCheckRaise.combos.length,
+    );
+    expect(bayExplicitOrdinaryRaise.descriptionVi).toContain('raise lên 30');
+    expect(bayExplicitOrdinaryRaise.descriptionVi).not.toContain('check-raise lên 30');
+    expect(bayExplicitOrdinaryRaise.assumptionsVi.join(' ')).toContain('Hành động công khai: raise lên 30.');
+
+    // Timeline inference for Bẫy: Branch A (ordinary raise) matches isCheckRaise: false; Branch B (check-raise) matches isCheckRaise: true
+    expect(
+      inferPublicActionFromTimeline(ordinaryDto.publicTimeline, 'bay', 'flop')?.isCheckRaise,
+    ).toBe(false);
+    expect(
+      inferPublicActionFromTimeline(checkRaiseDto.publicTimeline, 'bay', 'flop')?.isCheckRaise,
+    ).toBe(true);
+
+    const bayTimelineOrdinary = estimateRivalRange({
+      rivalId: 'bay',
+      playerId: 'bay',
+      board,
+      publicTimeline: ordinaryDto.publicTimeline,
+    });
+    const bayTimelineCheckRaise = estimateRivalRange({
+      rivalId: 'bay',
+      playerId: 'bay',
+      board,
+      publicTimeline: checkRaiseDto.publicTimeline,
+    });
+
+    expect(bayTimelineOrdinary.combos).toEqual(bayExplicitOrdinaryRaise.combos);
+    expect(bayTimelineCheckRaise.combos).toEqual(bayExplicitCheckRaise.combos);
   });
 });
