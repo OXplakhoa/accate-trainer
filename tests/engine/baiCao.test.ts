@@ -2,7 +2,14 @@
 import { CHIP_SET, checkInv1 } from '../../src/engine/chips';
 import { createDeck, formatCard, parseCards, type Card } from '../../src/engine/cards';
 import { createRng } from '../../src/engine/rng';
-import { baiCaoPoints, compareBaiCao, isBaTay, resolveBaiCao } from '../../src/engine/baiCao';
+import {
+  baiCaoPoints,
+  compareBaiCao,
+  createBaiCaoDeck,
+  isBaTay,
+  resolveBaiCao,
+  resolveBaiCaoWithDeck,
+} from '../../src/engine/baiCao';
 afterEach(() => expect(checkInv1([CHIP_SET])).toEqual({ ok: true }));
 const resolve = (players: string[], cards: string) => resolveBaiCao(players, parseCards(cards), createRng('fixed').fork('baicao'));
 const checkHands = (rounds: readonly (readonly { readonly cards: readonly Card[] }[])[]) => {
@@ -90,5 +97,38 @@ describe('bai cao', () => {
   it('rejects an empty draw source and too few contenders', () => {
     expect(() => resolveBaiCao(['A','B'], [], createRng('fixed'))).toThrow();
     expect(() => resolveBaiCao(['A'], createDeck(), createRng('fixed'))).toThrow();
+  });
+  it('S6 S7: shares draw source across multiple pots and recycles across pot boundaries', () => {
+    const undealt = parseCards('4c 5d Kh Qc Jd Ks 2c 3d 4h 2s 2h 3s');
+    const rng = createRng('multi-pot').fork('bai-cao');
+    const deck0 = createBaiCaoDeck(undealt);
+
+    // Pot 1 consumes first 6 cards: A gets 4c 5d Kh (9), B gets Qc Jd Ks (ba tay) -> B wins
+    const pot1 = resolveBaiCaoWithDeck(['A', 'B'], deck0, rng);
+    expect(pot1.result.winnerId).toBe('B');
+    expect(pot1.nextDeck.index).toBe(6);
+    expect(pot1.nextDeck.drawn).toHaveLength(6);
+
+    // Pot 2 continues from index 6: B gets 2c 3d 4h (9), C gets 2s 2h 3s (7) -> B wins
+    const pot2 = resolveBaiCaoWithDeck(['B', 'C'], pot1.nextDeck, rng);
+    expect(pot2.result.winnerId).toBe('B');
+    expect(pot2.result.rounds[0]![0]!.cards).toEqual(undealt.slice(6, 9));
+    expect(pot2.result.rounds[0]![1]!.cards).toEqual(undealt.slice(9, 12));
+    expect(pot2.nextDeck.index).toBe(12);
+    expect(pot2.nextDeck.drawn).toHaveLength(12);
+
+    // Pot 3 starts at exhausted source -> recycles all 12 previously drawn cards deterministically
+    const pot3 = resolveBaiCaoWithDeck(['A', 'C'], pot2.nextDeck, rng);
+    checkHands(pot3.result.rounds);
+    expect(['A', 'C']).toContain(pot3.result.winnerId);
+
+    // Deterministic replay with same seed produces identical results across all three pots
+    const replayRng = createRng('multi-pot').fork('bai-cao');
+    const r1 = resolveBaiCaoWithDeck(['A', 'B'], createBaiCaoDeck(undealt), replayRng);
+    const r2 = resolveBaiCaoWithDeck(['B', 'C'], r1.nextDeck, replayRng);
+    const r3 = resolveBaiCaoWithDeck(['A', 'C'], r2.nextDeck, replayRng);
+    expect(r1.result).toEqual(pot1.result);
+    expect(r2.result).toEqual(pot2.result);
+    expect(r3.result).toEqual(pot3.result);
   });
 });
