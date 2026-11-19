@@ -1,6 +1,6 @@
 # Packet P1a — Bài, bộ bài, đánh giá tay Hold'em, bài cào
 
-**Implementer:** GPT 6.2 Astra (codex) · **Reviewer:** GPT 6.2 Sol + Gemini 4 Neon · **Control:** Claude
+**Implementer:** GPT 6.1 Terra (codex) · **Reviewer:** GPT 6.2 Sol + Gemini 4 Neon · **Control:** Claude
 **Song song với:** P1b (chip). Hai packet không được sửa chung file nào.
 
 ---
