@@ -12,3 +12,7 @@
 
 1. **All-in chủ động.** Spec §3.3 cho hero chủ động bỏ hết khi stack nằm trong cap. D13b ghi all-in chỉ khi stack nhỏ hơn khoản cần bỏ. Phần đã rõ là call thiếu chip trong cap và đánh dấu all-in khi một action hợp lệ làm stack về 0. Hai nguồn chưa thống nhất về action chủ động riêng ngoài những ca này.
 2. **Bước bắt buộc thiếu chip đúng mệnh giá.** D20/D21 cho đổi chip với người khác hoặc pot nhưng chưa nêu engine có tự đổi từ stack hoặc kho để thu ante hay trả pot chính xác hay không. Ví dụ S5 có thể gặp pot `100 + 10 + 5` sau khi đổi chip, trong khi hai khoản trả cần là 55 và 60. Triển khai các cơ cấu thanh toán được và hỗ trợ đổi chip cùng giá trị theo luật hiện hành. Giữ nguyên trạng thái khi chưa có phép đổi cần thiết, để có thể tiếp tục sau khi đổi.
+
+## P1d
+
+1. **Nhãn raise ở H1 bước 6.** Spec §3.3 mô tả `+Y` là số điểm người raise bỏ thêm vào pot. H1 ghi `Raise lên 30 (+20)` khi mức cược tăng từ 10 lên 30, còn B bỏ 30 điểm vì chưa góp ở flop. Test engine kiểm khoản B bỏ và pot 70. Cần thống nhất ý nghĩa `+Y` khi triển khai phần hiển thị.
