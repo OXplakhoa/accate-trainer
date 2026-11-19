@@ -29,6 +29,17 @@ describe('Holdem evaluation', () => {
       ['As Ad Ac Kh Qs','Ah Ac As Kd Js'], ['As Js 9s 7s 4s','Ah Jh 9h 7h 3h'],
     ]) expect(compareHands(evalHand(a!), evalHand(b!))).toBe(1);
   });
+  it('compares different categories in both directions', () => {
+    const pair = evalHand('As Ad 9c 7h 3s');
+    const straight = evalHand('As 2d 3c 4h 5s');
+    expect(compareHands(straight, pair)).toBe(1);
+    expect(compareHands(pair, straight)).toBe(-1);
+  });
+  it('selects the best five from six cards', () => {
+    const hand = evalHand('As Ad Ac Ks Kd 2h');
+    expect(hand.category).toBe('full-house'); expect(hand.ranks).toEqual([14, 13]);
+    expect(hand.best5).toHaveLength(5);
+  });
   it('selects the strongest five from seven', () => {
     for (const [input, category, ranks] of [
       ['2s 4s 6s 8s Ts 7d 9h','flush',[10,8,6,4,2]],
@@ -42,6 +53,9 @@ describe('Holdem evaluation', () => {
   });
   it('S1: board plays and suits do not break ties', () => {
     expect(compareHands(evalHand('5c 6d 7h 8s 9c 2s 3d'), evalHand('5c 6d 7h 8s 9c 2h 4d'))).toBe(0);
+    const spades = evalHand('As Js 9s 7s 3s'); const hearts = evalHand('Ah Jh 9h 7h 3h');
+    expect(spades.category).toBe(hearts.category); expect(spades.ranks).toEqual(hearts.ranks);
+    expect(compareHands(spades, hearts)).toBe(0);
   });
   it('rejects invalid lengths and duplicates', () => {
     for (const input of ['As Ks Qs Js', 'As Ks Qs Js Ts 9s 8s 7s', 'As As Qs Js Ts']) expect(() => evalHand(input)).toThrow();

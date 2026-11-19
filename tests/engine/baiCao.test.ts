@@ -1,10 +1,17 @@
 ﻿import { afterEach, describe, expect, it } from 'vitest';
 import { CHIP_SET, checkInv1 } from '../../src/engine/chips';
-import { createDeck, parseCards } from '../../src/engine/cards';
+import { createDeck, formatCard, parseCards, type Card } from '../../src/engine/cards';
 import { createRng } from '../../src/engine/rng';
 import { baiCaoPoints, compareBaiCao, isBaTay, resolveBaiCao } from '../../src/engine/baiCao';
 afterEach(() => expect(checkInv1([CHIP_SET])).toEqual({ ok: true }));
 const resolve = (players: string[], cards: string) => resolveBaiCao(players, parseCards(cards), createRng('fixed').fork('baicao'));
+const checkHands = (rounds: readonly (readonly { readonly cards: readonly Card[] }[])[]) => {
+  for (const round of rounds) for (const draw of round) {
+    expect(draw.cards).toHaveLength(3);
+    expect(new Set(draw.cards.map(formatCard)).size).toBe(3);
+    expect(checkInv1([CHIP_SET])).toEqual({ ok: true });
+  }
+};
 describe('bai cao', () => {
   it('S4: ten is not a face card', () => {
     expect(baiCaoPoints(parseCards('Td Jc Qh'))).toBe(0); expect(isBaTay(parseCards('Td Jc Qh'))).toBe(false);
@@ -28,9 +35,57 @@ describe('bai cao', () => {
   });
   it('S7: recycles 27 cards during ten player draw deterministically', () => {
     const players = Array.from({length:10}, (_, i) => String(i)); const deck = createDeck().slice(0,27);
-    const run = () => resolveBaiCao(players, deck, createRng('S7').fork('baicao'));
+    const shuffledInputs: Card[][] = []; const shuffledOutputs: Card[][] = [];
+    const run = () => {
+      const rng = createRng('S7').fork('baicao');
+      return resolveBaiCao(players, deck, { ...rng, shuffle<T>(items: readonly T[]): T[] {
+        const result = rng.shuffle(items);
+        shuffledInputs.push([...items] as unknown as Card[]); shuffledOutputs.push(result as unknown as Card[]);
+        return result;
+      } });
+    };
     const result = run(); expect(result).toEqual(run()); expect(players).toContain(result.winnerId);
-    expect(result.rounds[0]).toHaveLength(10); expect(result.rounds[0]!.every(d => d.cards.length === 3)).toBe(true);
+    expect(result.rounds[0]).toHaveLength(10); checkHands(result.rounds);
+    expect(shuffledInputs[0]!.map(formatCard).sort()).toEqual(deck.map(formatCard).sort());
+    const expected = createRng('S7').fork('baicao').shuffle(deck);
+    expect(shuffledOutputs[0]).toEqual(expected);
+    expect(shuffledOutputs[0]).not.toEqual(deck);
+    expect(result.rounds[0]![9]!.cards).toEqual(expected.slice(0, 3));
+    const last = result.rounds.at(-1)!;
+    const winner = last.find(draw => draw.playerId === result.winnerId)!;
+    expect(last.filter(draw => compareBaiCao(draw.cards, winner.cards) === 0)).toHaveLength(1);
+    expect(last.every(draw => compareBaiCao(winner.cards, draw.cards) >= 0)).toBe(true);
+  });
+  it('S7: preserves partial hands when recycling 31 or four cards', () => {
+    const faces = parseCards('Jc Qc Kc Jd Qd Kd Jh Qh Kh');
+    const faceNames = new Set(faces.map(formatCard));
+    const deck31 = [...faces, ...createDeck().filter(card => !faceNames.has(formatCard(card)))].slice(0, 31);
+    for (const [players, deck] of [
+      [Array.from({ length: 8 }, (_, i) => String(i)), deck31],
+      [['A', 'B'], parseCards('As 2s 3s 4s')],
+    ] as [string[], Card[]][]) {
+      const result = resolveBaiCao(players, deck, createRng('fixed').fork('baicao'));
+      checkHands(result.rounds);
+      if (deck.length === 31) {
+        expect(result.rounds.length).toBeGreaterThan(1);
+        expect(result.rounds[1]!.length).toBeGreaterThanOrEqual(3);
+        expect(result.rounds[1]![2]!.cards[0]).toEqual(deck[30]);
+      }
+      if (deck.length === 4) expect(result.rounds[0]![1]!.cards[0]).toEqual(deck[3]);
+    }
+  });
+  it('S2 S7: stops after 1000 tied rounds for a degenerate source', () => {
+    const rng = createRng('fixed').fork('baicao'); let shuffles = 0;
+    expect(() => resolveBaiCao(['A', 'B'], parseCards('Jc Qd Kh Jh Qs Kc'), {
+      ...rng, shuffle<T>(items: readonly T[]): T[] { shuffles++; return rng.shuffle(items); },
+    })).toThrow('unresolved after 1000 rounds');
+    expect(shuffles).toBe(999);
+  });
+  it('rejects sources with fewer than three distinct cards', () => {
+    for (const cards of ['', 'As', 'As 2s']) {
+      expect(() => resolve(['A', 'B'], cards)).toThrow('At least three distinct cards');
+    }
+    expect(() => resolve(['A', 'B'], 'As As 2s')).toThrow('distinct cards');
   });
   it('rejects an empty draw source and too few contenders', () => {
     expect(() => resolveBaiCao(['A','B'], [], createRng('fixed'))).toThrow();
