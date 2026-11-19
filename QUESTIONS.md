@@ -16,3 +16,8 @@
 ## P1d
 
 1. **Nhãn raise ở H1 bước 6.** Spec §3.3 mô tả `+Y` là số điểm người raise bỏ thêm vào pot. H1 ghi `Raise lên 30 (+20)` khi mức cược tăng từ 10 lên 30, còn B bỏ 30 điểm vì chưa góp ở flop. Test engine kiểm khoản B bỏ và pot 70. Cần thống nhất ý nghĩa `+Y` khi triển khai phần hiển thị.
+
+## M2
+
+1. **Outs theo range.** Spec §5 yêu cầu trừ dirty outs nhưng chưa quy định ngưỡng để đếm một lá thắng trước một phần range. Calculator trả cả kết quả theo từng lá, tách lá thắng sạch trước range giả định khỏi lá có kết quả hỗn hợp. Gắn tiêu chí cụ thể khi đem số outs vào Drill.
+2. **Trigger tilt mới khi đang tilt.** §4.1.1 xác định tilt kéo dài 3–5 ván và chưa quy định có gia hạn khi lại bị bad beat trong khoảng đó hay không. Giữ đợt tilt đang chạy trong phạm vi 3–5 ván đã rút. Đưa việc gia hạn vào cùng quyết định tinh chỉnh Nóng.
