@@ -11,3 +11,4 @@ export * from './handTypes';
 export * from './pots';
 export * from './showdown';
 export * from './tableBoundary';
+export * from './calculator';
