@@ -16,14 +16,38 @@ export function compareBaiCao(a: readonly Card[], b: readonly Card[]): -1 | 0 | 
 }
 export interface BaiCaoDraw { readonly playerId: string; readonly cards: readonly Card[]; readonly points: number; readonly baTay: boolean; }
 export interface BaiCaoResult { readonly winnerId: string; readonly rounds: readonly (readonly BaiCaoDraw[])[]; }
-export function resolveBaiCao(contenders: readonly string[], undealt: readonly Card[], rng: Rng): BaiCaoResult {
-  if (contenders.length < 2 || new Set(contenders).size !== contenders.length) throw new Error('Expected distinct contenders');
-  if (new Set(undealt.map(card => `${card.rank}:${card.suit}`)).size !== undealt.length) throw new Error('Expected distinct cards');
+export interface BaiCaoDeckState {
+  readonly source: readonly Card[];
+  readonly index: number;
+  readonly drawn: readonly Card[];
+}
+
+function cardKey(card: Card): string {
+  return `${card.rank}:${card.suit}`;
+}
+
+export function createBaiCaoDeck(undealt: readonly Card[]): BaiCaoDeckState {
+  if (new Set(undealt.map(cardKey)).size !== undealt.length) throw new Error('Expected distinct cards');
   if (undealt.length < 3) throw new Error('At least three distinct cards are required');
+  return { source: [...undealt], index: 0, drawn: [] };
+}
+
+export function resolveBaiCaoWithDeck(
+  contenders: readonly string[],
+  deckState: BaiCaoDeckState,
+  rng: Rng,
+): { readonly result: BaiCaoResult; readonly nextDeck: BaiCaoDeckState } {
+  if (contenders.length < 2 || new Set(contenders).size !== contenders.length) throw new Error('Expected distinct contenders');
+  if (!Number.isInteger(deckState.index) || deckState.index < 0 || deckState.index > deckState.source.length) {
+    throw new RangeError('Invalid bai cao deck index');
+  }
+  const activePool = [...deckState.source.slice(deckState.index), ...deckState.drawn];
+  if (new Set(activePool.map(cardKey)).size !== activePool.length) throw new Error('Expected distinct cards');
+  if (activePool.length < 3) throw new Error('At least three distinct cards are required');
   let players = [...contenders];
-  let source = [...undealt];
-  let index = 0;
-  let drawn: Card[] = [];
+  let source = [...deckState.source];
+  let index = deckState.index;
+  let drawn = [...deckState.drawn];
   const rounds: BaiCaoDraw[][] = [];
   while (players.length > 1) {
     // Protect against degenerate sources that can tie indefinitely.
@@ -47,5 +71,13 @@ export function resolveBaiCao(contenders: readonly string[], undealt: readonly C
     for (const draw of round) if (compareBaiCao(draw.cards, best.cards) > 0) best = draw;
     players = round.filter(draw => compareBaiCao(draw.cards, best.cards) === 0).map(draw => draw.playerId);
   }
-  return { winnerId: players[0]!, rounds };
+  return {
+    result: { winnerId: players[0]!, rounds },
+    nextDeck: { source, index, drawn },
+  };
+}
+
+export function resolveBaiCao(contenders: readonly string[], undealt: readonly Card[], rng: Rng): BaiCaoResult {
+  if (contenders.length < 2 || new Set(contenders).size !== contenders.length) throw new Error('Expected distinct contenders');
+  return resolveBaiCaoWithDeck(contenders, createBaiCaoDeck(undealt), rng).result;
 }
