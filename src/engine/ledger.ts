@@ -53,7 +53,7 @@ export function summarizeLedger(
     }
   }
 
-  const summary: Record<string, PlayerLedger> = {};
+  const summary = Object.create(null) as Record<string, PlayerLedger>;
   for (const [playerId, entry] of byPlayer) {
     summary[playerId] = { ...entry };
   }

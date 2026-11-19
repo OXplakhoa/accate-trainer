@@ -128,6 +128,18 @@ describe('bank', () => {
     expect(checkInv1([insufficient, subtractChips(CHIP_SET, insufficient)])).toEqual({ ok: true });
   });
 
+  it('C1: structureFor500 backtracks from 10x5 (remainder 450 unformable by 100s) to 5x100', () => {
+    const bank: ChipCounts = { 5: 10, 10: 0, 50: 0, 100: 5 };
+    const restOfSet = subtractChips(CHIP_SET, bank);
+    expect(checkInv1([bank, restOfSet])).toEqual({ ok: true });
+
+    const chosen = structureFor500(bank);
+    expect(chosen).toEqual({ 5: 0, 10: 0, 50: 0, 100: 5 });
+
+    const remainingBank = subtractChips(bank, chosen!);
+    expect(checkInv1([chosen!, remainingBank, restOfSet])).toEqual({ ok: true });
+  });
+
   it('takeExactLargeFirst prioritizes 100 > 50 > 10 > 5 and returns null when impossible', () => {
     const stack: ChipCounts = { 5: 10, 10: 10, 50: 6, 100: 3 };
     const taken = takeExactLargeFirst(stack, 500);
@@ -190,12 +202,17 @@ describe('bank', () => {
       playerId: `p${i}`,
       stack: init.perPlayer,
     }));
+    expect(checkInv1([bank, ...seats.map((s) => s.stack)])).toEqual({ ok: true });
 
     // Bust p7, p8, p9 -> p0, p1, p2 and rebuy them to exhaust bank (C4 setup)
     seats[0] = { playerId: 'p0', stack: addChips(seats[0]!.stack, seats[7]!.stack) };
     seats[7] = { playerId: 'p7', stack: emptyChips() };
+    expect(checkInv1([bank, ...seats.map((s) => s.stack)])).toEqual({ ok: true });
+
     seats[1] = { playerId: 'p1', stack: addChips(seats[1]!.stack, seats[8]!.stack) };
     seats[8] = { playerId: 'p8', stack: emptyChips() };
+    expect(checkInv1([bank, ...seats.map((s) => s.stack)])).toEqual({ ok: true });
+
     seats[2] = { playerId: 'p2', stack: addChips(seats[2]!.stack, seats[9]!.stack) };
     seats[9] = { playerId: 'p9', stack: emptyChips() };
     expect(checkInv1([bank, ...seats.map((s) => s.stack)])).toEqual({ ok: true });
@@ -241,6 +258,41 @@ describe('bank', () => {
     expect(chipValue(seats[0]!.stack)).toBe(1000);
     expect(chipValue(seats[6]!.stack)).toBe(500);
     expect(bank).toEqual(emptyChips());
+  });
+
+  it('C5: combines partial bank small chips with cashed-out 100s for rebuy', () => {
+    let bank: ChipCounts = { 5: 20, 10: 10, 50: 2, 100: 0 };
+    const seats: SeatedStack[] = [
+      { playerId: 'p0', stack: { 5: 0, 10: 0, 50: 0, 100: 25 } },
+      { playerId: 'buyer', stack: emptyChips() },
+      { playerId: 'p2', stack: { 5: 40, 10: 45, 50: 24, 100: 0 } },
+      { playerId: 'p3', stack: { 5: 40, 10: 45, 50: 24, 100: 0 } },
+    ];
+    expect(checkInv1([bank, ...seats.map((s) => s.stack)])).toEqual({ ok: true });
+
+    const plan = planBuyIn(bank, seats, 'buyer', 0);
+    expect(plan).toEqual({
+      kind: 'cash-out-then-bank',
+      cashOutPlayerId: 'p0',
+      cashOutChips: { 5: 0, 10: 0, 50: 0, 100: 5 },
+      chips: { 5: 20, 10: 10, 50: 2, 100: 2 },
+    });
+    if (plan.kind !== 'cash-out-then-bank') {
+      throw new Error('Expected cash-out-then-bank plan');
+    }
+
+    // Step 1: cash out p0 -> bank
+    seats[0] = { playerId: 'p0', stack: subtractChips(seats[0]!.stack, plan.cashOutChips) };
+    bank = addChips(bank, plan.cashOutChips);
+    expect(checkInv1([bank, ...seats.map((s) => s.stack)])).toEqual({ ok: true });
+
+    // Step 2: bank -> buyer
+    bank = subtractChips(bank, plan.chips);
+    seats[1] = { playerId: 'buyer', stack: addChips(seats[1]!.stack, plan.chips) };
+    expect(checkInv1([bank, ...seats.map((s) => s.stack)])).toEqual({ ok: true });
+
+    expect(seats[1]!.stack).toEqual({ 5: 20, 10: 10, 50: 2, 100: 2 });
+    expect(bank).toEqual({ 5: 0, 10: 0, 50: 0, 100: 3 });
   });
 
   it('C6: breaks ties among largest stacks clockwise starting from openerIndex', () => {
@@ -326,8 +378,16 @@ describe('bank', () => {
       { playerId: 'buyer', stack: emptyChips() },
       { playerId: 'p1', stack: { 5: 10, 10: 10, 50: 4, 100: 1 } }, // 450 < 500
     ];
+    const remainingPool = subtractChips(CHIP_SET, addChips(bank, seats[1]!.stack));
+    expect(checkInv1([bank, ...seats.map((s) => s.stack), remainingPool])).toEqual({ ok: true });
+
     expect(() => planBuyIn(bank, seats, 'buyer', 0)).toThrow(/below 500/);
+    expect(checkInv1([bank, ...seats.map((s) => s.stack), remainingPool])).toEqual({ ok: true });
+
     expect(() => planBuyIn(bank, seats, 'buyer', -1)).toThrow(RangeError);
+    expect(checkInv1([bank, ...seats.map((s) => s.stack), remainingPool])).toEqual({ ok: true });
+
     expect(() => planBuyIn(bank, seats, 'buyer', 2)).toThrow(RangeError);
+    expect(checkInv1([bank, ...seats.map((s) => s.stack), remainingPool])).toEqual({ ok: true });
   });
 });

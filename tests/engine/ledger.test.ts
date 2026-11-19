@@ -95,6 +95,35 @@ describe('ledger', () => {
     expect(profitLoss(summary['rival-3']!, rival3Stack)).toBe(0);
   });
 
+  it('C7: records "__proto__" as an own enumerable and JSON-serializable key', () => {
+    const buyInChips: ChipCounts = { 5: 0, 10: 0, 50: 0, 100: 5 };
+    const bank = subtractChips(CHIP_SET, buyInChips);
+    expect(checkInv1([bank, buyInChips])).toEqual({ ok: true });
+
+    const summary = summarizeLedger([
+      { type: 'buy-in', playerId: '__proto__', chips: buyInChips },
+    ]);
+
+    expect(Object.hasOwn(summary, '__proto__')).toBe(true);
+    expect(Object.keys(summary)).toEqual(['__proto__']);
+
+    const entry = summary['__proto__'];
+    expect(entry).toEqual({
+      buyIns: 1,
+      rebuys: 0,
+      cashOuts: 0,
+      invested: 500,
+      cashedOut: 0,
+    });
+    expect(entry?.buyIns).toBe(1);
+    expect(entry?.invested).toBe(500);
+    expect(profitLoss(entry!, buyInChips)).toBe(0);
+    expect(JSON.stringify(summary)).toBe(
+      '{"__proto__":{"buyIns":1,"rebuys":0,"cashOuts":0,"invested":500,"cashedOut":0}}',
+    );
+    expect(checkInv1([bank, buyInChips])).toEqual({ ok: true });
+  });
+
   it('handles empty event list and rejects invalid chip counts', () => {
     expect(checkInv1([CHIP_SET])).toEqual({ ok: true });
     expect(summarizeLedger([])).toEqual({});
