@@ -60,13 +60,43 @@ describe('chips', () => {
     });
   });
 
-  it('checkInv1 never passes when any location has negative counts even if sum matches CHIP_SET', () => {
+  it('checkInv1 throws RangeError when any location has negative or non-integer counts', () => {
     const over: ChipCounts = { 5: 101, 10: 100, 50: 50, 100: 25 };
     const negative: ChipCounts = { 5: -1, 10: 0, 50: 0, 100: 0 };
+    const fractional: ChipCounts = { 5: 0.5, 10: 0, 50: 0, 100: 0 };
 
-    expect(checkInv1([over, negative])).toEqual({
+    expect(() => checkInv1([over, negative])).toThrow(RangeError);
+    expect(() => checkInv1([CHIP_SET, fractional])).toThrow(RangeError);
+  });
+
+  it('checkInv1([]) returns ok:false with diff equal to -CHIP_SET', () => {
+    expect(checkInv1([])).toEqual({
       ok: false,
-      diff: { 5: 0, 10: 0, 50: 0, 100: 0 },
+      diff: {
+        5: -CHIP_SET[5],
+        10: -CHIP_SET[10],
+        50: -CHIP_SET[50],
+        100: -CHIP_SET[100],
+      },
     });
+  });
+
+  it('chipValue, addChips, and subtractChips throw RangeError on negative or fractional counts', () => {
+    const valid = emptyChips();
+    const negative: ChipCounts = { 5: 0, 10: -1, 50: 0, 100: 0 };
+    const fractional: ChipCounts = { 5: 0, 10: 0, 50: 1.5, 100: 0 };
+
+    expect(() => chipValue(negative)).toThrow(RangeError);
+    expect(() => chipValue(fractional)).toThrow(RangeError);
+
+    expect(() => addChips(negative, valid)).toThrow(RangeError);
+    expect(() => addChips(valid, negative)).toThrow(RangeError);
+    expect(() => addChips(fractional, valid)).toThrow(RangeError);
+    expect(() => addChips(valid, fractional)).toThrow(RangeError);
+
+    expect(() => subtractChips(negative, valid)).toThrow(RangeError);
+    expect(() => subtractChips(valid, negative)).toThrow(RangeError);
+    expect(() => subtractChips(fractional, valid)).toThrow(RangeError);
+    expect(() => subtractChips(valid, fractional)).toThrow(RangeError);
   });
 });

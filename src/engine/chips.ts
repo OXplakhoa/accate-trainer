@@ -77,23 +77,18 @@ export function subtractChips(a: ChipCounts, b: ChipCounts): ChipCounts {
  * must equal CHIP_SET for EACH denomination.
  * When `ok` is false, `diff[denom]` is `actualTotal[denom] - CHIP_SET[denom]`
  * (positive = surplus, negative = deficit).
+ *
+ * @throws {RangeError} if any location has a negative or non-integer chip count.
  */
 export function checkInv1(
   locations: readonly ChipCounts[],
 ): { ok: true } | { ok: false; diff: Record<Denomination, number> } {
   const totals: Record<Denomination, number> = { 5: 0, 10: 0, 50: 0, 100: 0 };
-  let hasNegative = false;
 
   for (const loc of locations) {
+    assertNonNegativeCounts(loc, 'checkInv1');
     for (const denom of DENOMINATIONS) {
-      const count = loc[denom];
-      if (!Number.isInteger(count)) {
-        throw new RangeError(`checkInv1: non-integer chip count for ${denom}: ${String(count)}`);
-      }
-      if (count < 0) {
-        hasNegative = true;
-      }
-      totals[denom] += count;
+      totals[denom] += loc[denom];
     }
   }
 
@@ -104,7 +99,7 @@ export function checkInv1(
     100: totals[100] - CHIP_SET[100],
   };
 
-  if (hasNegative || diff[5] !== 0 || diff[10] !== 0 || diff[50] !== 0 || diff[100] !== 0) {
+  if (diff[5] !== 0 || diff[10] !== 0 || diff[50] !== 0 || diff[100] !== 0) {
     return { ok: false, diff };
   }
 
