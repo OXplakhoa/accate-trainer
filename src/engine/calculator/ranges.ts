@@ -283,6 +283,14 @@ export function normalizeOpponentRange(
       continue;
     }
 
+    const nextTotalWeight = totalWeight + entry.weight;
+    if (!Number.isFinite(nextTotalWeight)) {
+      throw new CalculatorError(
+        'invalid-weight',
+        `Total weight overflow for opponent "${range.opponentId}" range`,
+      );
+    }
+
     validEntries.push(
       Object.freeze({
         key,
@@ -293,7 +301,7 @@ export function normalizeOpponentRange(
         weight: entry.weight,
       }),
     );
-    totalWeight += entry.weight;
+    totalWeight = nextTotalWeight;
   }
 
   if (validEntries.length === 0 && !allowEmpty) {

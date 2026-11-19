@@ -4,6 +4,7 @@ import { compareHands, evaluateHand } from '../../../src/engine/handEval';
 import { createRng } from '../../../src/engine/rng';
 import {
   CalculatorError,
+  analyzeOutsAgainstRange,
   assumptionsContextFromSnapshot,
   calculateExactEquity,
   extractDecisionSnapshot,
@@ -499,6 +500,488 @@ describe('calculator/equity', () => {
         maxEvaluations: 100,
       }),
     ).toThrowError(CalculatorError);
+
+    assertPureFixtureInv1(6);
+  });
+
+  it('rejects impossible card-pool cardinality quickly without repeating feasibility DFS (6 opponents on 10-card pool)', () => {
+    assertPureFixtureInv1(6);
+
+    const hero: readonly [Card, Card] = [parseCard('As'), parseCard('Ad')];
+    const board = parseCards('2c 4d 7h 9s Jc');
+    const pool = parseCards('2d 3d 4c 5d 6d 7d 8d 9d Td Jd');
+    const all45Pairs: Array<{ readonly cards: readonly [Card, Card]; readonly weight: number }> = [];
+    for (let i = 0; i < pool.length; i++) {
+      for (let j = i + 1; j < pool.length; j++) {
+        all45Pairs.push({ cards: [pool[i]!, pool[j]!], weight: 1 });
+      }
+    }
+    expect(all45Pairs).toHaveLength(45);
+
+    const sixOpponents: OpponentRangeInput[] = Array.from({ length: 6 }, (_, idx) => ({
+      opponentId: `O${idx + 1}`,
+      combos: all45Pairs,
+    }));
+
+    // simulateEquity with samples=1000, maxAttempts=1000 and with default maxAttempts (250,000)
+    for (const maxAttempts of [1_000, undefined] as const) {
+      try {
+        simulateEquity({
+          heroCards: hero,
+          board,
+          opponentRanges: sixOpponents,
+          rng: createRng('cardinality-10-pool'),
+          samples: 1_000,
+          ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+        });
+        throw new Error('Expected impossible-range-combination');
+      } catch (err) {
+        expect(err).toBeInstanceOf(CalculatorError);
+        expect((err as CalculatorError).code).toBe('impossible-range-combination');
+      }
+    }
+
+    // calculateExactEquity also rejects immediately via cardinality check
+    try {
+      calculateExactEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: sixOpponents,
+      });
+      throw new Error('Expected impossible-range-combination');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CalculatorError);
+      expect((err as CalculatorError).code).toBe('impossible-range-combination');
+    }
+
+    // Subset cardinality trap: 6 opponents on 10-card pool + 7th opponent on disjoint cards
+    // (global union is 14 >= 14, yet the 6-opponent subset only has 10 < 12 cards)
+    const sevenOpponents: OpponentRangeInput[] = [
+      ...sixOpponents,
+      {
+        opponentId: 'O7',
+        combos: [
+          { cards: [parseCard('Qh'), parseCard('Kh')], weight: 1 },
+          { cards: [parseCard('Qs'), parseCard('Ks')], weight: 1 },
+        ],
+      },
+    ];
+    for (const fn of [
+      () =>
+        simulateEquity({
+          heroCards: hero,
+          board,
+          opponentRanges: sevenOpponents,
+          rng: createRng('subset-cardinality'),
+          samples: 100,
+          maxAttempts: 500,
+        }),
+      () =>
+        calculateExactEquity({
+          heroCards: hero,
+          board,
+          opponentRanges: sevenOpponents,
+        }),
+    ]) {
+      try {
+        fn();
+        throw new Error('Expected impossible-range-combination');
+      } catch (err) {
+        expect(err).toBeInstanceOf(CalculatorError);
+        expect((err as CalculatorError).code).toBe('impossible-range-combination');
+      }
+    }
+
+    assertPureFixtureInv1(6);
+  });
+
+  it('bounds DFS exhaustion without repeating work in simulateEquity and caps partial-tuple exploration in calculateExactEquity', () => {
+    assertPureFixtureInv1(6);
+
+    // Hub-leaf construction: 6 opponents, each combo pairs 1 card from 5-card hub H
+    // with 1 card from 15-card leaf set L (75 combos per opponent, 20-card union >= 12).
+    // Passes cardinality checks, yet no 6 pairwise-disjoint combos exist because |H| = 5 < 6,
+    // generating millions of partial tuples with 0 completed showdowns.
+    const hero: readonly [Card, Card] = [parseCard('As'), parseCard('Ad')];
+    const board = parseCards('2c 4d 7h 9s Jc');
+    const hub = parseCards('2d 3d 4c 5d 6d');
+    const leaves = parseCards('7d 8d 9d Td Jd Qd Kd 2h 3h 4h 5h 6h 8h Th Qh');
+    const hubLeafCombos: Array<{ readonly cards: readonly [Card, Card]; readonly weight: number }> =
+      [];
+    for (const h of hub) {
+      for (const l of leaves) {
+        hubLeafCombos.push({ cards: [h, l], weight: 1 });
+      }
+    }
+    const sixHubLeafOpps: OpponentRangeInput[] = Array.from({ length: 6 }, (_, idx) => ({
+      opponentId: `HL${idx + 1}`,
+      combos: hubLeafCombos,
+    }));
+
+    // simulateEquity: bounded DFS runs AT MOST ONCE when it returns 'unknown', then finishes
+    // maxAttempts quickly and preserves distinct max-attempts-exceeded-no-samples error semantics.
+    try {
+      simulateEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: sixHubLeafOpps,
+        rng: createRng('hub-leaf-dfs-unknown'),
+        samples: 1_000,
+        maxAttempts: 1_000,
+        maxFeasibilitySteps: 2_000,
+      });
+      throw new Error('Expected max-attempts-exceeded-no-samples');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CalculatorError);
+      expect((err as CalculatorError).code).toBe('max-attempts-exceeded-no-samples');
+    }
+
+    // Feasible hub-leaf variant (6 hub cards -> valid disjoint tuple exists) with tiny
+    // maxFeasibilitySteps so DFS returns 'unknown', verifying it is never misclassified as impossible
+    // and can still collect valid samples without repeating DFS.
+    const feasibleHub = parseCards('2d 3d 4c 5d 6d Kh');
+    const feasibleCombos: Array<{ readonly cards: readonly [Card, Card]; readonly weight: number }> =
+      [];
+    for (const h of feasibleHub) {
+      for (const l of leaves) {
+        feasibleCombos.push({ cards: [h, l], weight: 1 });
+      }
+    }
+    const sixFeasibleHubLeafOpps: OpponentRangeInput[] = Array.from({ length: 6 }, (_, idx) => ({
+      opponentId: `FHL${idx + 1}`,
+      combos: feasibleCombos,
+    }));
+    const feasibleSim = simulateEquity({
+      heroCards: hero,
+      board,
+      opponentRanges: sixFeasibleHubLeafOpps,
+      rng: createRng('feasible-hub-leaf-dfs-unknown'),
+      samples: 10,
+      maxAttempts: 5_000,
+      maxFeasibilitySteps: 5,
+    });
+    expect(feasibleSim.completedSamples).toBeGreaterThan(0);
+    expect(Number.isFinite(feasibleSim.equity)).toBe(true);
+
+    // calculateExactEquity: partial-tuple exploration cap triggers cleanly even with 0 completed runouts
+    try {
+      calculateExactEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: sixHubLeafOpps,
+      });
+      throw new Error('Expected exact-enumeration-limit-exceeded');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CalculatorError);
+      expect((err as CalculatorError).code).toBe('exact-enumeration-limit-exceeded');
+    }
+
+    // Explicit maxSearchSteps cap works and preserves exact-enumeration-limit-exceeded semantics
+    try {
+      calculateExactEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: sixHubLeafOpps,
+        maxSearchSteps: 500,
+      });
+      throw new Error('Expected exact-enumeration-limit-exceeded');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CalculatorError);
+      expect((err as CalculatorError).code).toBe('exact-enumeration-limit-exceeded');
+    }
+
+    // Small impossible hub-leaf fixture (|H| = 2, |L| = 5, 3 opponents -> union 7 >= 6)
+    // completes within maxSearchSteps and throws distinct impossible-range-combination.
+    const smallHub = parseCards('2d 3d');
+    const smallLeaves = parseCards('5d 6d 7d 8d 9d');
+    const smallCombos: Array<{ readonly cards: readonly [Card, Card]; readonly weight: number }> = [];
+    for (const h of smallHub) {
+      for (const l of smallLeaves) {
+        smallCombos.push({ cards: [h, l], weight: 1 });
+      }
+    }
+    const threeSmallHubLeaf: OpponentRangeInput[] = Array.from({ length: 3 }, (_, idx) => ({
+      opponentId: `SHL${idx + 1}`,
+      combos: smallCombos,
+    }));
+    try {
+      calculateExactEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: threeSmallHubLeaf,
+      });
+      throw new Error('Expected impossible-range-combination');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CalculatorError);
+      expect((err as CalculatorError).code).toBe('impossible-range-combination');
+    }
+
+    // Budget parameters reject non-safe integers and non-positive values
+    const baseOpp: OpponentRangeInput[] = [
+      { opponentId: 'V1', combos: [{ cards: [parseCard('Kd'), parseCard('Ks')], weight: 1 }] },
+    ];
+    for (const badBudget of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, 1e20]) {
+      for (const call of [
+        () =>
+          simulateEquity({
+            heroCards: hero,
+            board,
+            opponentRanges: baseOpp,
+            rng: createRng('bad-budget'),
+            samples: badBudget,
+          }),
+        () =>
+          simulateEquity({
+            heroCards: hero,
+            board,
+            opponentRanges: baseOpp,
+            rng: createRng('bad-budget'),
+            samples: 10,
+            maxAttempts: badBudget,
+          }),
+        () =>
+          simulateEquity({
+            heroCards: hero,
+            board,
+            opponentRanges: baseOpp,
+            rng: createRng('bad-budget'),
+            samples: 10,
+            maxFeasibilitySteps: badBudget,
+          }),
+        () =>
+          calculateExactEquity({
+            heroCards: hero,
+            board,
+            opponentRanges: baseOpp,
+            maxEvaluations: badBudget,
+          }),
+        () =>
+          calculateExactEquity({
+            heroCards: hero,
+            board,
+            opponentRanges: baseOpp,
+            maxSearchSteps: badBudget,
+          }),
+      ]) {
+        try {
+          call();
+          throw new Error(`Expected invalid-sample-config for budget ${String(badBudget)}`);
+        } catch (err) {
+          expect(err).toBeInstanceOf(CalculatorError);
+          expect((err as CalculatorError).code).toBe('invalid-sample-config');
+        }
+      }
+    }
+
+    assertPureFixtureInv1(6);
+  });
+
+  it('preserves multiway scale invariance across extreme weights (1e-180, 1e180, subnormals, dynamic range) and handles unrepresentable totals cleanly', () => {
+    assertPureFixtureInv1(6);
+
+    const hero: readonly [Card, Card] = [parseCard('As'), parseCard('Ad')];
+    const board = parseCards('2c 4d 7h 9s Jc');
+
+    const makeFixtureRanges = (scaleA: number, scaleB: number): OpponentRangeInput[] => [
+      {
+        opponentId: 'A',
+        combos: [
+          { cards: [parseCard('Jd'), parseCard('Jh')], weight: scaleA }, // set of Jacks beats AA
+          { cards: [parseCard('8h'), parseCard('8d')], weight: scaleA }, // pair of 8s loses to AA
+        ],
+      },
+      {
+        opponentId: 'B',
+        combos: [{ cards: [parseCard('5s'), parseCard('6s')], weight: scaleB }], // high card loses
+      },
+    ];
+
+    // Exact scale invariance at w = 1, 1e-180, 1e180, subnormal MIN_VALUE, 1e307, and asymmetric scales
+    const scalePairs: ReadonlyArray<readonly [number, number]> = [
+      [1, 1],
+      [1e-180, 1e-180],
+      [1e180, 1e180],
+      [Number.MIN_VALUE, Number.MIN_VALUE],
+      [1e307, 1e307],
+      [1e-180, 1e180],
+      [1e180, 1e-180],
+    ];
+
+    for (const [scaleA, scaleB] of scalePairs) {
+      const exact = calculateExactEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: makeFixtureRanges(scaleA, scaleB),
+      });
+      expect(Number.isFinite(exact.equity)).toBe(true);
+      expect(exact.equity).toBeCloseTo(0.5, 12);
+      expect(exact.winRate).toBeCloseTo(0.5, 12);
+      expect(exact.loseRate).toBeCloseTo(0.5, 12);
+      expect(exact.tieRate).toBe(0);
+    }
+
+    // Sampling scale invariance with fixed seed across extreme representable scales
+    const mcBase = simulateEquity({
+      heroCards: hero,
+      board,
+      opponentRanges: makeFixtureRanges(1, 1),
+      rng: createRng('scale-inv-mc'),
+      samples: 2_000,
+    });
+    expect(Math.abs(mcBase.equity - 0.5)).toBeLessThan(0.04);
+
+    for (const [scaleA, scaleB] of [
+      [1e-180, 1e-180],
+      [1e180, 1e180],
+      [Number.MIN_VALUE, Number.MIN_VALUE],
+      [1e307, 1e307],
+    ] as const) {
+      const mcScaled = simulateEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: makeFixtureRanges(scaleA, scaleB),
+        rng: createRng('scale-inv-mc'),
+        samples: 2_000,
+      });
+      expect(Number.isFinite(mcScaled.equity)).toBe(true);
+      expect(mcScaled.equity).toBeCloseTo(mcBase.equity, 12);
+      expect(mcScaled.winRate).toBeGreaterThan(0.4);
+      expect(mcScaled.loseRate).toBeGreaterThan(0.4);
+    }
+
+    // Non-uniform 3-way weighted scale invariance against independent brute-force oracle
+    const nonUniformHero: readonly [Card, Card] = [parseCard('Td'), parseCard('Tc')];
+    const nonUniformBoard = parseCards('2d 7c 9h Js 3s');
+    const baseOpp1 = [
+      { cards: [parseCard('As'), parseCard('Ah')] as const, weight: 3 },
+      { cards: [parseCard('4c'), parseCard('5c')] as const, weight: 1 },
+    ];
+    const baseOpp2 = [
+      { cards: [parseCard('As'), parseCard('Kd')] as const, weight: 3 },
+      { cards: [parseCard('4h'), parseCard('5h')] as const, weight: 1 },
+    ];
+    const baseOpp3 = [
+      { cards: [parseCard('6c'), parseCard('8c')] as const, weight: 2 },
+      { cards: [parseCard('6d'), parseCard('8d')] as const, weight: 5 },
+    ];
+    const oracle3Way = independentBruteForceOracle({
+      hero: nonUniformHero,
+      board: nonUniformBoard,
+      opponentRanges: [baseOpp1, baseOpp2, baseOpp3],
+    });
+    const scaled3Way = calculateExactEquity({
+      heroCards: nonUniformHero,
+      board: nonUniformBoard,
+      opponentRanges: [
+        {
+          opponentId: 'O1',
+          combos: baseOpp1.map((c) => ({ cards: c.cards, weight: c.weight * 1e-180 })),
+        },
+        {
+          opponentId: 'O2',
+          combos: baseOpp2.map((c) => ({ cards: c.cards, weight: c.weight * 1e180 })),
+        },
+        {
+          opponentId: 'O3',
+          combos: baseOpp3.map((c) => ({ cards: c.cards, weight: c.weight * 1e-120 })),
+        },
+      ],
+    });
+    expect(scaled3Way.equity).toBeCloseTo(oracle3Way.equity, 12);
+    expect(scaled3Way.winRate).toBeCloseTo(oracle3Way.winRate, 12);
+    expect(scaled3Way.loseRate).toBeCloseTo(oracle3Way.loseRate, 12);
+
+    // Extreme within-range dynamic range where every high-weight combo collides and the ONLY
+    // surviving disjoint tuples have product weights 1e-200 * 1e-200 = 1e-400 (lose) and
+    // 3e-200 * 1e-200 = 3e-400 (win) -> exact equity = 3/4 = 0.75.
+    // Even after per-range maxWeight normalization, linear multiplication would underflow to 0.
+    const dynamicExact = calculateExactEquity({
+      heroCards: [parseCard('Kc'), parseCard('Kd')],
+      board,
+      opponentRanges: [
+        {
+          opponentId: 'A',
+          combos: [
+            { cards: [parseCard('5s'), parseCard('Jd')], weight: 1 }, // collides with B's Jd8h and 5s6s
+            { cards: [parseCard('Jd'), parseCard('Jh')], weight: 1e-200 }, // set of Jacks beats KK
+            { cards: [parseCard('8h'), parseCard('8d')], weight: 3e-200 }, // pair of 8s loses to KK
+          ],
+        },
+        {
+          opponentId: 'B',
+          combos: [
+            { cards: [parseCard('Jd'), parseCard('8h')], weight: 1 }, // collides with all 3 combos of A
+            { cards: [parseCard('5s'), parseCard('6s')], weight: 1e-200 }, // high card loses to KK
+          ],
+        },
+      ],
+    });
+    expect(Number.isFinite(dynamicExact.equity)).toBe(true);
+    expect(dynamicExact.equity).toBeCloseTo(0.75, 12);
+    expect(dynamicExact.completedSamples).toBe(2);
+
+    // Single-range sampling at extreme finite weights (1e307 and Number.MIN_VALUE) must sample
+    // both combos ~50/50 and never degenerate to always sampling the last combo.
+    for (const extremeWeight of [1e307, Number.MIN_VALUE] as const) {
+      const singleSim = simulateEquity({
+        heroCards: hero,
+        board,
+        opponentRanges: [
+          {
+            opponentId: 'SingleExtreme',
+            combos: [
+              { cards: [parseCard('Jd'), parseCard('Jh')], weight: extremeWeight }, // hero loses
+              { cards: [parseCard('8h'), parseCard('8d')], weight: extremeWeight }, // hero wins
+            ],
+          },
+        ],
+        rng: createRng('single-extreme-weight'),
+        samples: 1_000,
+      });
+      expect(Number.isFinite(singleSim.equity)).toBe(true);
+      expect(singleSim.winRate).toBeGreaterThan(0.4);
+      expect(singleSim.loseRate).toBeGreaterThan(0.4);
+    }
+
+    // Unrepresentable single-range total (1e308 + 1e308 = Infinity) must throw invalid-weight cleanly
+    // and never silently produce NaN or sample only the last combo.
+    const overflowRange: OpponentRangeInput = {
+      opponentId: 'Overflow',
+      combos: [
+        { cards: [parseCard('Jd'), parseCard('Jh')], weight: 1e308 },
+        { cards: [parseCard('8h'), parseCard('8d')], weight: 1e308 },
+      ],
+    };
+    for (const call of [
+      () =>
+        simulateEquity({
+          heroCards: hero,
+          board,
+          opponentRanges: [overflowRange],
+          rng: createRng('overflow-single'),
+          samples: 200,
+        }),
+      () =>
+        calculateExactEquity({
+          heroCards: hero,
+          board,
+          opponentRanges: [overflowRange],
+        }),
+      () =>
+        analyzeOutsAgainstRange({
+          heroCards: hero,
+          board: parseCards('2c 4d 7h'),
+          opponentRange: overflowRange,
+        }),
+    ]) {
+      try {
+        call();
+        throw new Error('Expected invalid-weight for unrepresentable total weight');
+      } catch (err) {
+        expect(err).toBeInstanceOf(CalculatorError);
+        expect((err as CalculatorError).code).toBe('invalid-weight');
+      }
+    }
 
     assertPureFixtureInv1(6);
   });

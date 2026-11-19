@@ -125,6 +125,24 @@ describe('calculator/ranges & DecisionSnapshot', () => {
       ).toThrowError(CalculatorError);
     }
 
+    // Unrepresentable single-range total weight overflow across distinct combos
+    try {
+      normalizeOpponentRange(
+        {
+          opponentId: 'B',
+          combos: [
+            { cards: [parseCard('As'), parseCard('Ks')], weight: 1e308 },
+            { cards: [parseCard('Qd'), parseCard('Jd')], weight: 1e308 },
+          ],
+        },
+        [],
+      );
+      throw new Error('Expected invalid-weight for total weight overflow');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CalculatorError);
+      expect((err as CalculatorError).code).toBe('invalid-weight');
+    }
+
     // Empty range
     expect(() =>
       normalizeOpponentRange({ opponentId: 'B', combos: [] }, []),

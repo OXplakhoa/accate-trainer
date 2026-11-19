@@ -19,9 +19,19 @@ import {
 } from './types';
 
 const DEFAULT_SAMPLES = 5_000;
+const DEFAULT_MAX_ATTEMPTS_MULTIPLIER = 50;
+const DEFAULT_MIN_MAX_ATTEMPTS = 10_000;
+const MAX_SAFE_SAMPLES_FOR_ATTEMPTS_SCALE = Math.floor(
+  Number.MAX_SAFE_INTEGER / DEFAULT_MAX_ATTEMPTS_MULTIPLIER,
+);
 const DEFAULT_EXACT_MAX_EVALUATIONS = 200_000;
+const DEFAULT_EXACT_MAX_SEARCH_STEPS = 250_000;
+const EXACT_SEARCH_STEPS_PER_EVALUATION = 8;
+const MAX_SAFE_EVALUATIONS_FOR_SEARCH_SCALE = Math.floor(
+  Number.MAX_SAFE_INTEGER / EXACT_SEARCH_STEPS_PER_EVALUATION,
+);
 const FEASIBILITY_CHECK_STREAK = 64;
-const FEASIBILITY_DFS_NODE_LIMIT = 10_000;
+const DEFAULT_FEASIBILITY_MAX_STEPS = 50_000;
 
 export type EquityStopReason = 'target-reached' | 'max-attempts-reached' | 'exact-complete';
 
@@ -33,6 +43,8 @@ export interface SimulateEquityInput {
   readonly samples?: number;
   /** Finite work budget on sampling attempts (including rejected card-collision attempts). */
   readonly maxAttempts?: number;
+  /** Optional explicit work budget on bounded DFS feasibility search steps. */
+  readonly maxFeasibilitySteps?: number;
   readonly deadCards?: readonly Card[];
   readonly duplicatePolicy?: DuplicateComboPolicy;
   readonly assumptionsContext?: DecisionAssumptionsContext;
@@ -45,6 +57,8 @@ export interface CalculateExactEquityInput {
   readonly deadCards?: readonly Card[];
   readonly duplicatePolicy?: DuplicateComboPolicy;
   readonly maxEvaluations?: number;
+  /** Optional explicit work budget on partial-tuple exploration steps before showdown runouts. */
+  readonly maxSearchSteps?: number;
   readonly assumptionsContext?: DecisionAssumptionsContext;
 }
 
@@ -143,21 +157,157 @@ function validateAndPrepareEquityInputs(input: {
   };
 }
 
+function assertPositiveSafeInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new CalculatorError(
+      'invalid-sample-config',
+      `${name} must be a positive safe integer, received ${String(value)}`,
+    );
+  }
+}
+
+function popcount32(x: number): number {
+  let v = x | 0;
+  v = v - ((v >>> 1) & 0x55555555);
+  v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+  return Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
+}
+
+function popcountMask(lo: number, hi: number): number {
+  return popcount32(lo) + popcount32(hi);
+}
+
+interface RangeMaskInfo {
+  readonly range: NormalizedOpponentRange;
+  readonly maskLo: number;
+  readonly maskHi: number;
+  readonly cardCount: number;
+}
+
+function buildRangeMaskInfos(
+  ranges: readonly NormalizedOpponentRange[],
+): readonly RangeMaskInfo[] {
+  return ranges.map((range) => {
+    let maskLo = 0;
+    let maskHi = 0;
+    for (let i = 0; i < range.combos.length; i++) {
+      const combo = range.combos[i]!;
+      maskLo |= combo.maskLo;
+      maskHi |= combo.maskHi;
+    }
+    return {
+      range,
+      maskLo,
+      maskHi,
+      cardCount: popcountMask(maskLo, maskHi),
+    };
+  });
+}
+
+/**
+ * Necessary Hall-type cardinality check: any subset of `m` opponents must be able
+ * to draw `2 * m` distinct cards from the union of cards appearing in their ranges.
+ * Rejects impossible card pools (e.g., 6 opponents restricted to a 10-card pool)
+ * in O(totalCombos + k log k) before any backtracking search.
+ */
+function hasImpossibleCardCardinality(infos: readonly RangeMaskInfo[]): boolean {
+  const k = infos.length;
+  if (k <= 1) {
+    return false;
+  }
+
+  let allLo = 0;
+  let allHi = 0;
+  for (let i = 0; i < k; i++) {
+    allLo |= infos[i]!.maskLo;
+    allHi |= infos[i]!.maskHi;
+  }
+  if (popcountMask(allLo, allHi) < 2 * k) {
+    return true;
+  }
+
+  const byPool = [...infos].sort(
+    (a, b) =>
+      a.cardCount - b.cardCount ||
+      a.maskHi - b.maskHi ||
+      a.maskLo - b.maskLo ||
+      a.range.combos.length - b.range.combos.length,
+  );
+
+  let prefixLo = 0;
+  let prefixHi = 0;
+  let sameMaskCount = 0;
+  let prevLo = -1;
+  let prevHi = -1;
+  let prevCardCount = 0;
+
+  for (let i = 0; i < k; i++) {
+    const info = byPool[i]!;
+    prefixLo |= info.maskLo;
+    prefixHi |= info.maskHi;
+    if (popcountMask(prefixLo, prefixHi) < 2 * (i + 1)) {
+      return true;
+    }
+
+    if (info.maskLo === prevLo && info.maskHi === prevHi) {
+      sameMaskCount++;
+    } else {
+      prevLo = info.maskLo;
+      prevHi = info.maskHi;
+      prevCardCount = info.cardCount;
+      sameMaskCount = 1;
+    }
+    if (prevCardCount < 2 * sameMaskCount) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function buildCumulativeWeights(combos: readonly CanonicalComboEntry[]): {
   readonly cdf: readonly number[];
   readonly totalWeight: number;
 } {
+  let maxWeight = 0;
+  for (let i = 0; i < combos.length; i++) {
+    const w = combos[i]!.weight;
+    if (w > maxWeight) {
+      maxWeight = w;
+    }
+  }
+  if (!Number.isFinite(maxWeight) || maxWeight <= 0) {
+    throw new CalculatorError(
+      'invalid-weight',
+      'Opponent range must contain at least one finite positive combo weight',
+    );
+  }
+
+  // Normalize weights by maxWeight so every entry lies in (0, 1] and the CDF sum
+  // lies in [1, combos.length], preventing subnormal underflow or cumulative overflow.
   const cdf: number[] = new Array(combos.length);
   let sum = 0;
   for (let i = 0; i < combos.length; i++) {
-    sum += combos[i]!.weight;
+    sum += combos[i]!.weight / maxWeight;
     cdf[i] = sum;
+  }
+  if (!Number.isFinite(sum) || sum <= 0) {
+    throw new CalculatorError(
+      'invalid-weight',
+      'Opponent range cumulative weight is not representable as a finite positive number',
+    );
   }
   return { cdf, totalWeight: sum };
 }
 
 function sampleFromCdf(cdf: readonly number[], totalWeight: number, u: number): number {
   const target = u * totalWeight;
+  if (!Number.isFinite(target)) {
+    throw new CalculatorError(
+      'invalid-weight',
+      'Sampling target weight is not finite',
+    );
+  }
   let lo = 0;
   let hi = cdf.length - 1;
   while (lo < hi) {
@@ -173,29 +323,65 @@ function sampleFromCdf(cdf: readonly number[], totalWeight: number, u: number): 
 
 /**
  * Bounded DFS backtracking check to determine whether at least one pairwise-disjoint
- * combo tuple exists across all opponents. Orders opponents by smallest range first
- * so impossible multiway constraints fail fast.
+ * combo tuple exists across all opponents. Combines Hall-type cardinality checks,
+ * fail-first ordering, suffix card-union pruning, and failed-state memoization,
+ * strictly bounded by `maxSteps`.
  */
 function checkJointFeasibility(
-  ranges: readonly NormalizedOpponentRange[],
-  maxNodes: number,
+  infos: readonly RangeMaskInfo[],
+  maxSteps: number,
 ): 'feasible' | 'impossible' | 'unknown' {
-  const ordered = [...ranges].sort((a, b) => a.combos.length - b.combos.length);
-  let nodesVisited = 0;
+  if (hasImpossibleCardCardinality(infos)) {
+    return 'impossible';
+  }
+
+  const ordered = [...infos].sort(
+    (a, b) => a.range.combos.length - b.range.combos.length || a.cardCount - b.cardCount,
+  );
+  const k = ordered.length;
+  const suffixUnionLo = new Int32Array(k + 1);
+  const suffixUnionHi = new Int32Array(k + 1);
+  for (let i = k - 1; i >= 0; i--) {
+    suffixUnionLo[i] = suffixUnionLo[i + 1]! | ordered[i]!.maskLo;
+    suffixUnionHi[i] = suffixUnionHi[i + 1]! | ordered[i]!.maskHi;
+  }
+
+  let stepsVisited = 0;
   let budgetHit = false;
+  const failedStates = new Set<string>();
 
   const dfs = (depth: number, usedLo: number, usedHi: number): boolean => {
-    if (depth === ordered.length) {
+    if (depth === k) {
       return true;
     }
-    if (nodesVisited >= maxNodes) {
+
+    const remainingCards = popcountMask(
+      suffixUnionLo[depth]! & ~usedLo,
+      suffixUnionHi[depth]! & ~usedHi,
+    );
+    if (remainingCards < 2 * (k - depth)) {
+      return false;
+    }
+
+    const stateKey = `${depth}:${usedLo}:${usedHi}`;
+    if (failedStates.has(stateKey)) {
+      return false;
+    }
+
+    if (stepsVisited >= maxSteps) {
       budgetHit = true;
       return false;
     }
-    nodesVisited++;
+    stepsVisited++;
 
-    const combos = ordered[depth]!.combos;
+    const combos = ordered[depth]!.range.combos;
     for (let i = 0; i < combos.length; i++) {
+      if (stepsVisited >= maxSteps) {
+        budgetHit = true;
+        return false;
+      }
+      stepsVisited++;
+
       const combo = combos[i]!;
       if ((usedLo & combo.maskLo) !== 0 || (usedHi & combo.maskHi) !== 0) {
         continue;
@@ -207,6 +393,8 @@ function checkJointFeasibility(
         return false;
       }
     }
+
+    failedStates.add(stateKey);
     return false;
   };
 
@@ -277,25 +465,21 @@ export function simulateEquity(input: SimulateEquityInput): EquityResult {
     opponentRanges,
     rng,
     samples = DEFAULT_SAMPLES,
+    maxFeasibilitySteps = DEFAULT_FEASIBILITY_MAX_STEPS,
     deadCards,
     duplicatePolicy,
     assumptionsContext,
   } = input;
 
-  if (!Number.isInteger(samples) || samples < 1) {
-    throw new CalculatorError(
-      'invalid-sample-config',
-      `samples must be a positive integer, received ${String(samples)}`,
-    );
-  }
+  assertPositiveSafeInteger(samples, 'samples');
 
-  const maxAttempts = input.maxAttempts ?? Math.max(samples * 50, 10_000);
-  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-    throw new CalculatorError(
-      'invalid-sample-config',
-      `maxAttempts must be a positive integer, received ${String(maxAttempts)}`,
-    );
-  }
+  const maxAttempts =
+    input.maxAttempts ??
+    (samples > MAX_SAFE_SAMPLES_FOR_ATTEMPTS_SCALE
+      ? Number.MAX_SAFE_INTEGER
+      : Math.max(samples * DEFAULT_MAX_ATTEMPTS_MULTIPLIER, DEFAULT_MIN_MAX_ATTEMPTS));
+  assertPositiveSafeInteger(maxAttempts, 'maxAttempts');
+  assertPositiveSafeInteger(maxFeasibilitySteps, 'maxFeasibilitySteps');
 
   const {
     street,
@@ -312,6 +496,14 @@ export function simulateEquity(input: SimulateEquityInput): EquityResult {
   });
 
   const k = normalizedRanges.length;
+  const rangeMaskInfos = buildRangeMaskInfos(normalizedRanges);
+  if (hasImpossibleCardCardinality(rangeMaskInfos)) {
+    throw new CalculatorError(
+      'impossible-range-combination',
+      'No pairwise card-disjoint combination exists across the provided opponent ranges',
+    );
+  }
+
   const cdfs = normalizedRanges.map((r) => buildCumulativeWeights(r.combos));
   const comboRng = rng.fork('calculator:equity:combos');
   const boardRng = rng.fork('calculator:equity:board');
@@ -327,7 +519,8 @@ export function simulateEquity(input: SimulateEquityInput): EquityResult {
   let rejectedAttempts = 0;
   let consecutiveRejections = 0;
   let completedSamples = 0;
-  let feasibilityVerified = k === 1;
+  // Ensures the invariant feasibility DFS runs at most once even if it returns 'unknown'.
+  let feasibilityChecked = k === 1;
 
   let winCount = 0;
   let tieCount = 0;
@@ -358,23 +551,21 @@ export function simulateEquity(input: SimulateEquityInput): EquityResult {
     if (collision) {
       rejectedAttempts++;
       consecutiveRejections++;
-      if (!feasibilityVerified && consecutiveRejections >= FEASIBILITY_CHECK_STREAK) {
-        const status = checkJointFeasibility(normalizedRanges, FEASIBILITY_DFS_NODE_LIMIT);
+      if (!feasibilityChecked && consecutiveRejections >= FEASIBILITY_CHECK_STREAK) {
+        feasibilityChecked = true;
+        const status = checkJointFeasibility(rangeMaskInfos, maxFeasibilitySteps);
         if (status === 'impossible') {
           throw new CalculatorError(
             'impossible-range-combination',
             'No pairwise card-disjoint combination exists across the provided opponent ranges',
           );
         }
-        if (status === 'feasible') {
-          feasibilityVerified = true;
-        }
       }
       continue;
     }
 
     consecutiveRejections = 0;
-    feasibilityVerified = true;
+    feasibilityChecked = true;
 
     if (missingBoardCount > 0) {
       availableBoardPool.length = 0;
@@ -416,8 +607,9 @@ export function simulateEquity(input: SimulateEquityInput): EquityResult {
   }
 
   if (completedSamples === 0) {
-    if (!feasibilityVerified) {
-      const status = checkJointFeasibility(normalizedRanges, FEASIBILITY_DFS_NODE_LIMIT);
+    if (!feasibilityChecked) {
+      feasibilityChecked = true;
+      const status = checkJointFeasibility(rangeMaskInfos, maxFeasibilitySteps);
       if (status === 'impossible') {
         throw new CalculatorError(
           'impossible-range-combination',
@@ -496,7 +688,12 @@ export function simulateEquity(input: SimulateEquityInput): EquityResult {
 /**
  * Computes exact showdown equity by enumerating all pairwise card-disjoint opponent combo
  * tuples (weighted by the product of their weights) and all remaining board runouts.
- * Guarded by `maxEvaluations` so large state spaces fail cleanly instead of hanging.
+ *
+ * - Uses per-range normalization + log-space streaming log-sum-exp conditioning so multiway
+ *   product weights are strictly invariant under positive rescaling of any opponent range
+ *   and never falsely underflow or overflow.
+ * - Guarded by both `maxEvaluations` (completed runouts) and `maxSearchSteps` (partial-tuple
+ *   exploration steps) so large or heavily conflicting state spaces fail cleanly without hanging.
  */
 export function calculateExactEquity(input: CalculateExactEquityInput): EquityResult {
   const {
@@ -509,12 +706,17 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
     assumptionsContext,
   } = input;
 
-  if (!Number.isInteger(maxEvaluations) || maxEvaluations < 1) {
-    throw new CalculatorError(
-      'invalid-sample-config',
-      `maxEvaluations must be a positive integer, received ${String(maxEvaluations)}`,
-    );
-  }
+  assertPositiveSafeInteger(maxEvaluations, 'maxEvaluations');
+
+  const maxSearchSteps =
+    input.maxSearchSteps ??
+    (maxEvaluations > MAX_SAFE_EVALUATIONS_FOR_SEARCH_SCALE
+      ? Number.MAX_SAFE_INTEGER
+      : Math.max(
+          maxEvaluations * EXACT_SEARCH_STEPS_PER_EVALUATION,
+          DEFAULT_EXACT_MAX_SEARCH_STEPS,
+        ));
+  assertPositiveSafeInteger(maxSearchSteps, 'maxSearchSteps');
 
   const {
     street,
@@ -531,6 +733,46 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
   });
 
   const k = normalizedRanges.length;
+  const rangeMaskInfos = buildRangeMaskInfos(normalizedRanges);
+  if (hasImpossibleCardCardinality(rangeMaskInfos)) {
+    throw new CalculatorError(
+      'impossible-range-combination',
+      'No pairwise card-disjoint combination exists across the provided opponent ranges',
+    );
+  }
+
+  // Fail-first opponent order for traversal (assumptions still preserve caller order).
+  const orderedRanges = [...rangeMaskInfos]
+    .sort((a, b) => a.range.combos.length - b.range.combos.length || a.cardCount - b.cardCount)
+    .map((info) => {
+      const combos = info.range.combos;
+      let maxWeight = 0;
+      for (let i = 0; i < combos.length; i++) {
+        const w = combos[i]!.weight;
+        if (w > maxWeight) {
+          maxWeight = w;
+        }
+      }
+      const logMaxWeight = Math.log(maxWeight);
+      const logWeights = combos.map((combo) => {
+        const ratio = combo.weight / maxWeight;
+        return ratio > 0 ? Math.log(ratio) : Math.log(combo.weight) - logMaxWeight;
+      });
+      return {
+        combos,
+        logWeights,
+        maskLo: info.maskLo,
+        maskHi: info.maskHi,
+      };
+    });
+
+  const suffixUnionLo = new Int32Array(k + 1);
+  const suffixUnionHi = new Int32Array(k + 1);
+  for (let i = k - 1; i >= 0; i--) {
+    suffixUnionLo[i] = suffixUnionLo[i + 1]! | orderedRanges[i]!.maskLo;
+    suffixUnionHi[i] = suffixUnionHi[i + 1]! | orderedRanges[i]!.maskHi;
+  }
+
   const chosenCombos: CanonicalComboEntry[] = new Array(k);
   const fullBoard: Card[] = new Array(5);
   for (let i = 0; i < board.length; i++) {
@@ -538,18 +780,51 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
   }
 
   let evaluations = 0;
+  let searchSteps = 0;
   let validTupleCount = 0;
-  let totalWeight = 0;
-  let winWeight = 0;
-  let tieWeight = 0;
-  let tieEquityWeight = 0;
-  let loseWeight = 0;
+
+  let maxLogWeight = Number.NEGATIVE_INFINITY;
+  let totalScaledWeight = 0;
+  let winScaledWeight = 0;
+  let tieScaledWeight = 0;
+  let tieEquityScaledWeight = 0;
+  let loseScaledWeight = 0;
+
+  let tupleRunouts = 0;
+  let tupleWins = 0;
+  let tupleTies = 0;
+  let tupleTieEquity = 0;
+  let tupleLoses = 0;
+
+  const accumulateTupleRunouts = (logTupleWeight: number): void => {
+    let weightScale: number;
+    if (maxLogWeight === Number.NEGATIVE_INFINITY) {
+      maxLogWeight = logTupleWeight;
+      weightScale = 1;
+    } else if (logTupleWeight > maxLogWeight) {
+      const shift = Math.exp(maxLogWeight - logTupleWeight);
+      totalScaledWeight *= shift;
+      winScaledWeight *= shift;
+      tieScaledWeight *= shift;
+      tieEquityScaledWeight *= shift;
+      loseScaledWeight *= shift;
+      maxLogWeight = logTupleWeight;
+      weightScale = 1;
+    } else {
+      weightScale = Math.exp(logTupleWeight - maxLogWeight);
+    }
+
+    totalScaledWeight += tupleRunouts * weightScale;
+    winScaledWeight += tupleWins * weightScale;
+    tieScaledWeight += tupleTies * weightScale;
+    tieEquityScaledWeight += tupleTieEquity * weightScale;
+    loseScaledWeight += tupleLoses * weightScale;
+  };
 
   const enumerateBoardRunouts = (
     available: readonly Card[],
     startIdx: number,
     drawn: number,
-    tupleWeight: number,
   ): void => {
     if (drawn === missingBoardCount) {
       evaluations++;
@@ -560,14 +835,14 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
         );
       }
       const { outcome, equityShare } = evaluateShowdownOutcome(heroCards, chosenCombos, fullBoard);
-      totalWeight += tupleWeight;
+      tupleRunouts++;
       if (outcome === 'win') {
-        winWeight += tupleWeight;
+        tupleWins++;
       } else if (outcome === 'tie') {
-        tieWeight += tupleWeight;
-        tieEquityWeight += tupleWeight * equityShare;
+        tupleTies++;
+        tupleTieEquity += equityShare;
       } else {
-        loseWeight += tupleWeight;
+        tupleLoses++;
       }
       return;
     }
@@ -575,7 +850,7 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
     const remainingNeeded = missingBoardCount - drawn;
     for (let i = startIdx; i <= available.length - remainingNeeded; i++) {
       fullBoard[board.length + drawn] = available[i]!;
-      enumerateBoardRunouts(available, i + 1, drawn + 1, tupleWeight);
+      enumerateBoardRunouts(available, i + 1, drawn + 1);
     }
   };
 
@@ -583,31 +858,55 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
     depth: number,
     usedLo: number,
     usedHi: number,
-    productWeight: number,
+    logProductWeight: number,
   ): void => {
     if (depth === k) {
       validTupleCount++;
+      tupleRunouts = 0;
+      tupleWins = 0;
+      tupleTies = 0;
+      tupleTieEquity = 0;
+      tupleLoses = 0;
+
       if (missingBoardCount === 0) {
-        enumerateBoardRunouts([], 0, 0, productWeight);
-        return;
-      }
-      const available: Card[] = [];
-      for (let i = 0; i < baseRemainingDeck.length; i++) {
-        const cardIdx = baseRemainingIndices[i]!;
-        const blocked =
-          cardIdx < 26
-            ? (usedLo & (1 << cardIdx)) !== 0
-            : (usedHi & (1 << (cardIdx - 26))) !== 0;
-        if (!blocked) {
-          available.push(baseRemainingDeck[i]!);
+        enumerateBoardRunouts([], 0, 0);
+      } else {
+        const available: Card[] = [];
+        for (let i = 0; i < baseRemainingDeck.length; i++) {
+          const cardIdx = baseRemainingIndices[i]!;
+          const blocked =
+            cardIdx < 26
+              ? (usedLo & (1 << cardIdx)) !== 0
+              : (usedHi & (1 << (cardIdx - 26))) !== 0;
+          if (!blocked) {
+            available.push(baseRemainingDeck[i]!);
+          }
         }
+        enumerateBoardRunouts(available, 0, 0);
       }
-      enumerateBoardRunouts(available, 0, 0, productWeight);
+
+      accumulateTupleRunouts(logProductWeight);
       return;
     }
 
-    const combos = normalizedRanges[depth]!.combos;
+    const remainingCards = popcountMask(
+      suffixUnionLo[depth]! & ~usedLo,
+      suffixUnionHi[depth]! & ~usedHi,
+    );
+    if (remainingCards < 2 * (k - depth)) {
+      return;
+    }
+
+    const { combos, logWeights } = orderedRanges[depth]!;
     for (let i = 0; i < combos.length; i++) {
+      searchSteps++;
+      if (searchSteps > maxSearchSteps) {
+        throw new CalculatorError(
+          'exact-enumeration-limit-exceeded',
+          `Exact enumeration exceeded maxSearchSteps (${maxSearchSteps}) while exploring partial opponent tuples; use simulateEquity for large or high-conflict state spaces`,
+        );
+      }
+
       const combo = combos[i]!;
       if ((usedLo & combo.maskLo) !== 0 || (usedHi & combo.maskHi) !== 0) {
         continue;
@@ -617,14 +916,14 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
         depth + 1,
         usedLo | combo.maskLo,
         usedHi | combo.maskHi,
-        productWeight * combo.weight,
+        logProductWeight + logWeights[i]!,
       );
     }
   };
 
-  enumerateTuples(0, 0, 0, 1);
+  enumerateTuples(0, 0, 0, 0);
 
-  if (validTupleCount === 0 || totalWeight === 0) {
+  if (validTupleCount === 0 || totalScaledWeight === 0) {
     throw new CalculatorError(
       'impossible-range-combination',
       'No pairwise card-disjoint combination exists across the provided opponent ranges',
@@ -661,11 +960,11 @@ export function calculateExactEquity(input: CalculateExactEquityInput): EquityRe
   return Object.freeze({
     street,
     opponentCount: k,
-    equity: (winWeight + tieEquityWeight) / totalWeight,
-    winRate: winWeight / totalWeight,
-    tieRate: tieWeight / totalWeight,
-    tieEquityShare: tieEquityWeight / totalWeight,
-    loseRate: loseWeight / totalWeight,
+    equity: (winScaledWeight + tieEquityScaledWeight) / totalScaledWeight,
+    winRate: winScaledWeight / totalScaledWeight,
+    tieRate: tieScaledWeight / totalScaledWeight,
+    tieEquityShare: tieEquityScaledWeight / totalScaledWeight,
+    loseRate: loseScaledWeight / totalScaledWeight,
     requestedSamples: null,
     completedSamples: evaluations,
     attempts: evaluations,

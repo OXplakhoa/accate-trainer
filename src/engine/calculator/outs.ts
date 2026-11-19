@@ -427,7 +427,8 @@ export function analyzeOutsAgainstRange(
     }
   }
   const currentStreetEquity =
-    (currentWinWeight + 0.5 * currentTieWeight) / normalizedRange.totalWeight;
+    currentWinWeight / normalizedRange.totalWeight +
+    0.5 * (currentTieWeight / normalizedRange.totalWeight);
 
   const baseNotes: string[] = [
     'Đánh giá từng lá ứng viên trên street kế tiếp sau khi loại combo đối thủ bị blocker bởi lá đó.',
@@ -569,6 +570,10 @@ export function analyzeOutsAgainstRange(
       classification = 'non-out';
     }
 
+    const winShareAfter = validWeight > 0 ? winWeightAfter / validWeight : 0;
+    const tieShareAfter = validWeight > 0 ? tieWeightAfter / validWeight : 0;
+    const loseShareAfter = validWeight > 0 ? loseWeightAfter / validWeight : 0;
+
     const detail: RangeOutCardDetail = Object.freeze({
       card,
       heroBefore: currentHand,
@@ -589,11 +594,10 @@ export function analyzeOutsAgainstRange(
       winningComboCountAfter,
       tyingComboCountAfter,
       losingComboCountAfter,
-      winShareAfter: validWeight > 0 ? winWeightAfter / validWeight : 0,
-      tieShareAfter: validWeight > 0 ? tieWeightAfter / validWeight : 0,
-      loseShareAfter: validWeight > 0 ? loseWeightAfter / validWeight : 0,
-      nextStreetEquityAfter:
-        validWeight > 0 ? (winWeightAfter + 0.5 * tieWeightAfter) / validWeight : 0,
+      winShareAfter,
+      tieShareAfter,
+      loseShareAfter,
+      nextStreetEquityAfter: validWeight > 0 ? winShareAfter + 0.5 * tieShareAfter : 0,
       stillLosesToSomeComboAfter: loseWeightAfter > 0,
     });
 
