@@ -125,7 +125,8 @@ export default tseslint.config(
         },
         {
           selector: "VariableDeclarator[init.name='Math']",
-          message: 'Aliasing or destructuring Math is forbidden in src/engine; call Math.* directly.',
+          message:
+            'Aliasing or destructuring Math is forbidden in src/engine; call Math.* directly.',
         },
         {
           selector: "AssignmentExpression[right.name='Math']",

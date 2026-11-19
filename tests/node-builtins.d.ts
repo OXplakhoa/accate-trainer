@@ -5,10 +5,7 @@ declare module 'node:fs' {
     isFile(): boolean;
   }
 
-  export function readdirSync(
-    path: string,
-    options: { withFileTypes: true },
-  ): Dirent[];
+  export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
 }
 
 declare module 'node:path' {
