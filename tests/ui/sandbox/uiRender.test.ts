@@ -1,15 +1,19 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getRivalSeatMetadata, parseCard } from '../../../src/engine';
+import { getRivalSeatMetadata, parseCard, RIVAL_IDS } from '../../../src/engine';
 import {
+  cashOutPlayerAtBoundary,
   createSandboxSession,
+  enterHandBoundary,
   getHeroActionValidation,
   HERO_PLAYER_ID,
   performHeroAction,
   SandboxApp,
   stageChip,
+  stepOneBotTurn,
 } from '../../../src/ui/sandbox';
+import { BoundaryPanel } from '../../../src/ui/sandbox/components/BoundaryPanel';
 import { HandReviewModal } from '../../../src/ui/sandbox/components/HandReviewModal';
 import { HeroControls } from '../../../src/ui/sandbox/components/HeroControls';
 import { TableSeat } from '../../../src/ui/sandbox/components/TableSeat';
@@ -271,5 +275,72 @@ describe('P4 Sandbox UI Rendering — B3, B5, C2, P5 Tournament Slots & Review',
     expect(reviewHtml).toContain('+24,0 điểm');
     expect(reviewHtml).toContain('Tốt');
     expect(reviewHtml).toContain('Luyện spot này trong Drill');
+  });
+
+  it('Mobile-first priority & 10-seat progressive detail: board and hero controls precede seats panel while preserving all styles & chip details', () => {
+    const html10 = renderToStaticMarkup(
+      createElement(SandboxApp, {
+        initialSeed: 'ui-10-seat-priority',
+        initialSettings: {
+          playerCount: 10,
+          enabledRivalIds: [...RIVAL_IDS],
+        },
+        mode: 'sandbox',
+        storage: null,
+      }),
+    );
+
+    const boardIdx = html10.indexOf('class="sb-board"');
+    const actionBarIdx = html10.indexOf('class="sb-action-bar"');
+    const seatsPanelIdx = html10.indexOf('class="sb-seats-panel"');
+
+    expect(boardIdx).toBeGreaterThan(-1);
+    expect(actionBarIdx).toBeGreaterThan(boardIdx);
+    expect(seatsPanelIdx).toBeGreaterThan(actionBarIdx);
+
+    // Progressive detail controls and all 9 rival style labels remain present & accessible
+    expect(html10).toContain('Hiện chip tất cả');
+    expect(html10).toContain('aria-expanded="false"');
+    expect(html10).toContain('aria-label="Cơ cấu chip theo mệnh giá"');
+    expect(html10).toContain('10 ghế');
+    for (const rivalId of RIVAL_IDS) {
+      expect(html10).toContain(getRivalSeatMetadata(rivalId).styleLabel);
+    }
+  });
+
+  it('BoundaryPanel allows explicit next-hand click when < 4 seats (T4 auto-invite) while preserving manual invite controls', () => {
+    let s = createSandboxSession({
+      seed: 'ui-boundary-t4',
+      settings: { playerCount: 4, allowOutOfTurn: false },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    s = performHeroAction(s, 'fold');
+    let guard = 0;
+    while (s.phase === 'in-hand' && s.hand?.phase === 'betting' && guard < 100) {
+      s = stepOneBotTurn(s);
+      guard++;
+    }
+    s = enterHandBoundary(s);
+    s = cashOutPlayerAtBoundary(s, HERO_PLAYER_ID);
+    expect(s.boundary!.seats.length).toBe(3);
+
+    const html = renderToStaticMarkup(
+      createElement(BoundaryPanel, {
+        boundary: s.boundary!,
+        seatProfiles: s.seatProfiles,
+        hasPendingSettings: false,
+        onRebuyPlayer: () => undefined,
+        onCashOutPlayer: () => undefined,
+        onInviteRival: () => undefined,
+        onSeatHeroBack: () => undefined,
+        onOpenExchange: () => undefined,
+        onStartNextHand: () => undefined,
+      }),
+    );
+
+    expect(html).toContain('Mời rival mới (+500)');
+    expect(html).toContain('+ Mời thêm rival');
+    expect(html).toContain('Ngồi lại bàn (+500)');
+    expect(html).toMatch(/<button type="button" class="sb-btn sb-btn--primary">Chia ván tiếp theo<\/button>/);
   });
 });

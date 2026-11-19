@@ -55,7 +55,10 @@ export function BoundaryPanel({
           <button
             type="button"
             className="sb-btn sb-btn--primary"
-            disabled={!readiness.ready}
+            disabled={
+              readiness.zeroStackPlayerIds.length > 0 ||
+              readiness.missingAnteDenominationPlayerIds.length > 0
+            }
             onClick={onStartNextHand}
           >
             Chia ván tiếp theo
@@ -81,8 +84,9 @@ export function BoundaryPanel({
       {readiness.needsPlayers > 0 && (
         <div className="sb-inline-alert sb-inline-alert--warning" role="alert">
           <span>
-            Bàn chỉ còn {readiness.playerCount} người (tối thiểu 4 người — luật T4). Cần mời thêm{' '}
-            {readiness.needsPlayers} rival.
+            Bàn chỉ còn {readiness.playerCount} người (tối thiểu 4 người — luật T4). Bấm &quot;Chia ván
+            tiếp theo&quot; để tự mời thêm {readiness.needsPlayers} rival từ ghế chờ (+500 từ kho), hoặc
+            mời thủ công.
           </span>
           <button type="button" className="sb-btn sb-btn--accent sb-btn--sm" onClick={onInviteRival}>
             Mời rival mới (+500)

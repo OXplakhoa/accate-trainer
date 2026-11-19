@@ -232,7 +232,7 @@ export function HeroControls({
               </div>
               <div className="sb-staged-tray__chips">
                 {stagedValue === 0 ? (
-                  <span className="sb-muted">Bấm từng chip bên trái để ghép khoản cược</span>
+                  <span className="sb-muted">Bấm từng chip để ghép khoản cược</span>
                 ) : (
                   DENOMINATIONS.map((denom) =>
                     stagedChips[denom] > 0 ? (

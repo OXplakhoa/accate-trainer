@@ -264,14 +264,10 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     expect(s.boundary!.seats.length).toBe(3);
     expect(chipValue(s.boundary!.bank)).toBe(bankBefore + rivalStackVal);
 
-    // T4: Starting next hand with 3 players MUST be blocked
-    const blockedT4 = startNextHand(s);
-    expect(blockedT4.phase).toBe('between-hands');
-    expect(blockedT4.statusNotice?.tone).toBe('warning');
-
-    // Invite replacement rival -> back to 4 players
+    // T4: Readiness reports 1 player needed while at 3 seats; manual invite still works cleanly
+    expect(checkReadyForNextHand(s.boundary!).needsPlayers).toBe(1);
     s = inviteRivalAtBoundary(s);
-    assertInvariants(s, 'after T4 invite');
+    assertInvariants(s, 'after manual T4 invite');
     expect(s.boundary!.seats.length).toBe(4);
 
     // T3: Simulate a 0-chip seat at boundary by moving all their chips to another seat (preserving INV-1)
@@ -977,5 +973,132 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     assertInvariants(sNongHand2, 'live b5 hand 2');
     expect(sNongHand2.hand!.dealerSeatIndex).not.toBe(dealerBefore);
     expect(getSeatRivalMetadata(sNongHand2, 'nong')?.isTilted).toBe(true);
+  });
+
+  it('T4 regression: 4-seat control-sandbox-0 after Hero leave auto-invites from waiting list on startNextHand without creating chips', () => {
+    let s = createSandboxSession({
+      seed: 'control-sandbox-0',
+      settings: { playerCount: 4 },
+    });
+    assertInvariants(s, 't4 control-sandbox-0 init');
+    expect(s.hand!.seats.length).toBe(4);
+
+    // Request Hero leave mid-hand and advance until hand completes
+    s = requestHeroLeave(s);
+    assertInvariants(s, 't4 after requestHeroLeave');
+    s = advanceUntilHeroOrEnd(s);
+    assertInvariants(s, 't4 after advanceUntilHeroOrEnd');
+
+    // Enter hand boundary explicitly (idempotent when finalizeCompletedHand already moved to boundary)
+    s = enterHandBoundary(s);
+    assertInvariants(s, 't4 at boundary');
+    expect(s.phase).toBe('between-hands');
+    expect(s.boundary).not.toBeNull();
+    expect(s.boundary!.seats.length).toBe(3);
+    expect(s.boundary!.seats.some((seat) => seat.playerId === HERO_PLAYER_ID)).toBe(false);
+
+    const seatedBeforeIds = new Set(s.boundary!.seats.map((seat) => seat.playerId));
+    const unusedRivals = RIVAL_IDS.filter((id) => !seatedBeforeIds.has(id));
+    expect(unusedRivals.length).toBe(6);
+
+    const bankBeforeValue = chipValue(s.boundary!.bank);
+    expect(bankBeforeValue).toBeGreaterThanOrEqual(500);
+
+    // Calling startNextHand directly must auto-invite a 4th rival from waiting list before collecting ante
+    const hand2 = startNextHand(s);
+    assertInvariants(hand2, 't4 after startNextHand auto-invite');
+    expect(hand2.phase).toBe('in-hand');
+    expect(hand2.handNumber).toBe(2);
+    expect(hand2.hand).not.toBeNull();
+    expect(hand2.hand!.seats.length).toBe(4);
+
+    // Newly seated rival must be one of the 6 unused waiting-list profiles, funded 500 from bank (minus 5 ante = 495)
+    const invitedSeat = hand2.hand!.seats.find((seat) => !seatedBeforeIds.has(seat.playerId));
+    expect(invitedSeat).toBeDefined();
+    expect(unusedRivals).toContain(invitedSeat!.playerId);
+    expect(chipValue(invitedSeat!.stack) + invitedSeat!.totalContribution).toBe(500);
+    expect(chipValue(hand2.hand!.bank)).toBe(bankBeforeValue - 500);
+
+    // Ledger recorded Hero cash-out and the newly invited rival's buy-in (zero-sum with active stacks + pot)
+    const summary = summarizeLedger(hand2.ledgerEvents);
+    expect(summary[HERO_PLAYER_ID]?.cashOuts).toBe(1);
+    expect(summary[invitedSeat!.playerId]?.buyIns).toBe(1);
+
+    let netSum = chipValue(hand2.hand!.pot);
+    for (const [pid, entry] of Object.entries(summary)) {
+      const seat = hand2.hand!.seats.find((x) => x.playerId === pid);
+      netSum += profitLoss(entry, seat?.stack ?? emptyChips());
+    }
+    expect(netSum).toBe(0);
+  });
+
+  it('T4 readiness fallback: preserves helpful feedback when auto-invite cannot complete or invited seat lacks 5-chip for ante', () => {
+    let s = createSandboxSession({
+      seed: 'p4-t4-fallback-seed',
+      settings: { playerCount: 4, allowOutOfTurn: false },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    s = performHeroAction(s, 'fold');
+    s = advanceUntilHeroOrEnd(s);
+    s = enterHandBoundary(s);
+    s = cashOutPlayerAtBoundary(s, HERO_PLAYER_ID);
+    assertInvariants(s, 't4 fallback 3-seat boundary');
+    expect(s.boundary!.seats.length).toBe(3);
+
+    // Case 1 (INV-1 valid): Bank only holds 5×100 (0 five-chips); seated players hold all remaining chips.
+    // Auto-invite fills to 4 seats using 5×100 from bank (no chips created), then recheck flags missing 5-chip for ante.
+    const bankOnlyHundreds = { 5: 0, 10: 0, 50: 0, 100: 5 } as const;
+    const bankExcess = {
+      5: s.boundary!.bank[5],
+      10: s.boundary!.bank[10],
+      50: s.boundary!.bank[50],
+      100: s.boundary!.bank[100] - 5,
+    };
+    const sNoFivesInBank: SandboxSessionState = {
+      ...s,
+      boundary: {
+        ...s.boundary!,
+        bank: bankOnlyHundreds,
+        seats: s.boundary!.seats.map((seat, idx) =>
+          idx === 0
+            ? {
+                ...seat,
+                stack: {
+                  5: seat.stack[5] + bankExcess[5],
+                  10: seat.stack[10] + bankExcess[10],
+                  50: seat.stack[50] + bankExcess[50],
+                  100: seat.stack[100] + bankExcess[100],
+                },
+              }
+            : seat,
+        ),
+      },
+    };
+    assertInvariants(sNoFivesInBank, 't4 fallback bank-no-5s setup');
+
+    const afterAttempt = startNextHand(sNoFivesInBank);
+    assertInvariants(afterAttempt, 't4 fallback after auto-invite lacking 5-chip');
+    expect(afterAttempt.phase).toBe('between-hands');
+    expect(afterAttempt.boundary!.seats.length).toBe(4);
+    expect(afterAttempt.statusNotice?.tone).toBe('warning');
+    expect(afterAttempt.statusNotice?.guidance).toContain('thiếu chip mệnh giá 5');
+
+    // Case 2: Deposit genuinely unavailable (bank < 500 and all seated stacks < 500) -> stays at 3 seats with helpful warning.
+    const sLowFunds: SandboxSessionState = {
+      ...s,
+      boundary: {
+        ...s.boundary!,
+        bank: { 5: 0, 10: 0, 50: 0, 100: 2 },
+        seats: s.boundary!.seats.map((seat) => ({
+          ...seat,
+          stack: { 5: 10, 10: 10, 50: 2, 100: 0 }, // 250 each (< 500)
+        })),
+      },
+    };
+    const blockedNoDeposit = startNextHand(sLowFunds);
+    expect(blockedNoDeposit.phase).toBe('between-hands');
+    expect(blockedNoDeposit.boundary!.seats.length).toBe(3);
+    expect(blockedNoDeposit.statusNotice?.tone).toBe('warning');
+    expect(blockedNoDeposit.statusNotice?.guidance).toContain('Bàn chỉ còn 3 người');
   });
 });

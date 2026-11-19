@@ -124,6 +124,7 @@ export function SandboxApp({
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [botsPaused, setBotsPaused] = useState(false);
+  const [expandAllSeatDetails, setExpandAllSeatDetails] = useState(false);
   const [systemReducedMotion, setSystemReducedMotion] = useState<boolean>(() =>
     detectSystemReducedMotion(),
   );
@@ -653,233 +654,253 @@ export function SandboxApp({
       )}
 
       <main className="sb-main">
-        <div className="sb-table-rail">
-          <div className="sb-table-felt">
-            <section
-              className="sb-seats-grid"
-              aria-label={`Danh sách ${seatsToRender.length} ghế trên bàn`}
-            >
-              {seatsToRender.map((seat) => {
-                const inHandSeat = 'holeCards' in seat ? seat : null;
-                const isHero = seat.playerId === HERO_PLAYER_ID;
-                const metadata = getSeatRivalMetadata(session, seat.playerId);
-                const revealed =
-                  inHandSeat !== null && activeHand !== null
-                    ? isSeatCardsRevealed(activeHand, seat.playerId)
-                    : false;
-
-                return (
-                  <TableSeat
-                    key={seat.playerId}
-                    seatIndex={seat.seatIndex}
-                    playerId={seat.playerId}
-                    displayName={getPlayerName(seat.playerId, session.seatProfiles)}
-                    isHero={isHero}
-                    rivalMetadata={metadata}
-                    stack={seat.stack}
-                    holeCards={inHandSeat !== null ? inHandSeat.holeCards : null}
-                    cardsRevealed={revealed}
-                    status={inHandSeat !== null ? inHandSeat.status : 'active'}
-                    streetContribution={inHandSeat !== null ? inHandSeat.streetContribution : 0}
-                    isActiveTurn={
-                      activeHand !== null &&
-                      activeHand.phase === 'betting' &&
-                      activeHand.activePlayerId === seat.playerId
-                    }
-                    isDealer={
-                      activeHand !== null
-                        ? activeHand.dealerSeatIndex === seat.seatIndex
-                        : session.boundary?.lastDealerSeatIndex === seat.seatIndex
-                    }
-                    isOpener={
-                      activeHand !== null && activeHand.openerPlayerId === seat.playerId
-                    }
-                    declaration={inHandSeat !== null ? inHandSeat.declaration : null}
-                    isWinner={winnerIds.has(seat.playerId)}
-                    isBetweenHands={session.phase === 'between-hands'}
-                    terminology={lang}
-                    onBoundaryRebuy={
-                      session.phase === 'between-hands'
-                        ? (pid) => setSession((prev) => rebuyPlayerAtBoundary(prev, pid))
-                        : undefined
-                    }
-                    onBoundaryCashOut={
-                      session.phase === 'between-hands'
-                        ? (pid) => setSession((prev) => cashOutPlayerAtBoundary(prev, pid))
-                        : undefined
-                    }
-                  />
-                );
-              })}
-            </section>
-
-            <section
-              className="sb-felt-center"
-              aria-label="Khu vực bài chung và Pot"
-              data-deal-state={dealAnimState}
-            >
-              <div className="sb-pot-display">
-                <div className="sb-pot-display__main">
-                  <span className="sb-label">{tTerm('pot', lang)}</span>
-                  <strong className="sb-pot-value sb-num">{formatNumberVi(potValue)}</strong>
-                </div>
-                {potValue > 0 && (
-                  <div className="sb-pot-display__chips">
-                    {DENOMINATIONS.map((d) =>
-                      potChips[d] > 0 ? (
-                        <span key={d} className="sb-chip-pill sb-num">
-                          <ChipSvg denomination={d} size={16} decorative />
-                          <span>×{potChips[d]}</span>
+        <div className="sb-primary-stage">
+          <div className="sb-table-rail">
+            <div className="sb-table-felt">
+              <section
+                className="sb-felt-center"
+                aria-label="Khu vực bài chung và Pot"
+                data-deal-state={dealAnimState}
+              >
+                <div className="sb-pot-display">
+                  <div className="sb-pot-display__main">
+                    <span className="sb-label">{tTerm('pot', lang)}</span>
+                    <strong className="sb-pot-value sb-num">{formatNumberVi(potValue)}</strong>
+                  </div>
+                  {potValue > 0 && (
+                    <div className="sb-pot-display__chips">
+                      {DENOMINATIONS.map((d) =>
+                        potChips[d] > 0 ? (
+                          <span key={d} className="sb-chip-pill sb-num">
+                            <ChipSvg denomination={d} size={16} decorative />
+                            <span>×{potChips[d]}</span>
+                          </span>
+                        ) : null,
+                      )}
+                    </div>
+                  )}
+                  {potSlices.length > 1 && (
+                    <div className="sb-side-pots sb-num">
+                      {potSlices.map((slice) => (
+                        <span key={slice.index} className="sb-pill sb-pill--bet">
+                          {slice.index === 0 ? 'Main' : `Side ${slice.index}`}: {slice.amount}
                         </span>
-                      ) : null,
-                    )}
-                  </div>
-                )}
-                {potSlices.length > 1 && (
-                  <div className="sb-side-pots sb-num">
-                    {potSlices.map((slice) => (
-                      <span key={slice.index} className="sb-pill sb-pill--bet">
-                        {slice.index === 0 ? 'Main' : `Side ${slice.index}`}: {slice.amount}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-              <div className="sb-board" aria-label="5 lá bài chung">
-                {[0, 1, 2, 3, 4].map((slotIdx) => {
-                  const card = activeHand?.board[slotIdx] ?? null;
-                  return card !== null ? (
-                    <PlayingCard
-                      key={`${session.handNumber}-${slotIdx}-${card.rank}-${card.suit}`}
-                      card={card}
-                      size="lg"
-                      animated={!effectiveReducedMotion}
-                    />
-                  ) : (
-                    <div key={slotIdx} className="sb-board-slot" aria-hidden="true" />
-                  );
-                })}
-              </div>
+                <div className="sb-board" aria-label="5 lá bài chung">
+                  {[0, 1, 2, 3, 4].map((slotIdx) => {
+                    const card = activeHand?.board[slotIdx] ?? null;
+                    return card !== null ? (
+                      <PlayingCard
+                        key={`${session.handNumber}-${slotIdx}-${card.rank}-${card.suit}`}
+                        card={card}
+                        size="lg"
+                        animated={!effectiveReducedMotion}
+                      />
+                    ) : (
+                      <div key={slotIdx} className="sb-board-slot" aria-hidden="true" />
+                    );
+                  })}
+                </div>
 
-              <div className="sb-turn-status" aria-live="polite">
-                {activeHand !== null && activeHand.phase === 'betting' && activeHand.activePlayerId && (
-                  <p className="sb-turn-status__primary">
-                    Lượt hiện tại:{' '}
-                    <strong>{getPlayerName(activeHand.activePlayerId, session.seatProfiles)}</strong>
-                    {activeHand.currentBet > 0 && (
-                      <span className="sb-num">
-                        {' '}
-                        · Mức cược: <strong>{activeHand.currentBet}</strong> / {activeHand.streetCap}
-                      </span>
-                    )}
-                    {heroStagingOutOfTurn && (
-                      <span className="sb-pill sb-pill--pending">
-                        Bot tạm dừng khi bạn đang ghép chip hô sớm
-                      </span>
-                    )}
-                  </p>
-                )}
-
-                {activeHand !== null && activeHand.phase === 'complete' && (
-                  <div className="sb-turn-status__complete">
-                    <p>
-                      {activeHand.outcome?.kind === 'fold-win'
-                        ? `${getPlayerName(activeHand.outcome.winnerId, session.seatProfiles)} thắng pot ${activeHand.outcome.potAmount} điểm (mọi người fold).`
-                        : activeHand.outcome?.kind === 'showdown'
-                          ? `Showdown: ${activeHand.outcome.resolution.totalPayouts
-                              .map((p) => `${getPlayerName(p.playerId, session.seatProfiles)} +${p.amount}`)
-                              .join(' · ')}`
-                          : 'Ván đã hoàn tất.'}
+                <div className="sb-turn-status" aria-live="polite">
+                  {activeHand !== null && activeHand.phase === 'betting' && activeHand.activePlayerId && (
+                    <p className="sb-turn-status__primary">
+                      Lượt hiện tại:{' '}
+                      <strong>{getPlayerName(activeHand.activePlayerId, session.seatProfiles)}</strong>
+                      {activeHand.currentBet > 0 && (
+                        <span className="sb-num">
+                          {' '}
+                          · Mức cược: <strong>{activeHand.currentBet}</strong> / {activeHand.streetCap}
+                        </span>
+                      )}
+                      {heroStagingOutOfTurn && (
+                        <span className="sb-pill sb-pill--pending">
+                          Bot tạm dừng khi bạn đang ghép chip hô sớm
+                        </span>
+                      )}
                     </p>
-                    <div className="sb-turn-status__btns">
-                      {session.lastHandReview && (
+                  )}
+
+                  {activeHand !== null && activeHand.phase === 'complete' && (
+                    <div className="sb-turn-status__complete">
+                      <p>
+                        {activeHand.outcome?.kind === 'fold-win'
+                          ? `${getPlayerName(activeHand.outcome.winnerId, session.seatProfiles)} thắng pot ${activeHand.outcome.potAmount} điểm (mọi người fold).`
+                          : activeHand.outcome?.kind === 'showdown'
+                            ? `Showdown: ${activeHand.outcome.resolution.totalPayouts
+                                .map((p) => `${getPlayerName(p.playerId, session.seatProfiles)} +${p.amount}`)
+                                .join(' · ')}`
+                            : 'Ván đã hoàn tất.'}
+                      </p>
+                      <div className="sb-turn-status__btns">
+                        {session.lastHandReview && (
+                          <button
+                            type="button"
+                            className="sb-btn sb-btn--secondary sb-btn--sm"
+                            onClick={() => setReviewOpen(true)}
+                          >
+                            Xem lại & Phân tích
+                          </button>
+                        )}
                         <button
                           type="button"
-                          className="sb-btn sb-btn--secondary sb-btn--sm"
-                          onClick={() => setReviewOpen(true)}
+                          className="sb-btn sb-btn--ghost sb-btn--sm"
+                          onClick={handleOpenBoundary}
                         >
-                          Xem lại & Phân tích
+                          Quản lý ghế / Rebuy
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        className="sb-btn sb-btn--ghost sb-btn--sm"
-                        onClick={handleOpenBoundary}
-                      >
-                        Quản lý ghế / Rebuy
-                      </button>
-                      <button
-                        type="button"
-                        className="sb-btn sb-btn--primary sb-btn--sm"
-                        onClick={handleNextHand}
-                      >
-                        Chia ván mới
-                      </button>
+                        <button
+                          type="button"
+                          className="sb-btn sb-btn--primary sb-btn--sm"
+                          onClick={handleNextHand}
+                        >
+                          Chia ván mới
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {latestEventText && (
-                  <p className="sb-turn-status__log">{latestEventText}</p>
-                )}
+                  {latestEventText && (
+                    <p className="sb-turn-status__log">{latestEventText}</p>
+                  )}
 
-                {activeHand !== null && (
-                  <p className="sb-turn-status__bank sb-num">
-                    Kho chip: {formatNumberVi(chipValue(activeHand.bank))} ({formatChipBreakdown(activeHand.bank)})
-                  </p>
-                )}
-              </div>
-            </section>
+                  {activeHand !== null && (
+                    <p className="sb-turn-status__bank sb-num">
+                      Kho chip: {formatNumberVi(chipValue(activeHand.bank))} ({formatChipBreakdown(activeHand.bank)})
+                    </p>
+                  )}
+                </div>
+              </section>
+            </div>
           </div>
+
+          {session.phase === 'in-hand' && activeHand !== null ? (
+            <HeroControls
+              heroCards={heroSeat?.holeCards ?? null}
+              availableStack={availableHeroStack}
+              stagedChips={session.stagedChips}
+              validation={validation}
+              potValue={potValue}
+              streetCap={activeHand.streetCap}
+              terminology={lang}
+              pendingHeroLeave={session.pendingHeroLeave}
+              isAwaitingPayout={activeHand.phase === 'awaiting-payout'}
+              isHandComplete={activeHand.phase === 'complete'}
+              disableMidHandFeedback={disableMidHandFeedback}
+              timerSlot={timerSlot}
+              canPracticeSpot={canPracticeCurrentSpot}
+              onStageChip={handleStageChip}
+              onUnstageChip={handleUnstageChip}
+              onUndoLastChip={handleUndoLastChip}
+              onClearStaged={handleClearStaged}
+              onAction={handleHeroAction}
+              onDeclareOutOfTurn={handleHeroOutOfTurn}
+              onOpenExchange={() => setExchangeOpen(true)}
+              onRequestLeave={() => setSession((prev) => requestHeroLeave(prev))}
+              onPracticeSpot={
+                onPracticeSpot && activeHand
+                  ? () => onPracticeSpot(activeHand, HERO_PLAYER_ID)
+                  : undefined
+              }
+              onSettlePayout={handleSettlePayout}
+              onOpenReview={session.lastHandReview ? () => setReviewOpen(true) : undefined}
+              onNextHand={handleNextHand}
+            />
+          ) : session.boundary !== null ? (
+            <BoundaryPanel
+              boundary={session.boundary}
+              seatProfiles={session.seatProfiles}
+              hasPendingSettings={session.pendingSettings !== null}
+              onRebuyPlayer={(pid) => setSession((prev) => rebuyPlayerAtBoundary(prev, pid))}
+              onCashOutPlayer={(pid) => setSession((prev) => cashOutPlayerAtBoundary(prev, pid))}
+              onInviteRival={() => setSession((prev) => inviteRivalAtBoundary(prev))}
+              onSeatHeroBack={() => setSession((prev) => seatHeroAtBoundary(prev))}
+              onOpenExchange={() => setExchangeOpen(true)}
+              onStartNextHand={handleNextHand}
+              onOpenReview={session.lastHandReview ? () => setReviewOpen(true) : undefined}
+            />
+          ) : null}
         </div>
 
-        {session.phase === 'in-hand' && activeHand !== null ? (
-          <HeroControls
-            heroCards={heroSeat?.holeCards ?? null}
-            availableStack={availableHeroStack}
-            stagedChips={session.stagedChips}
-            validation={validation}
-            potValue={potValue}
-            streetCap={activeHand.streetCap}
-            terminology={lang}
-            pendingHeroLeave={session.pendingHeroLeave}
-            isAwaitingPayout={activeHand.phase === 'awaiting-payout'}
-            isHandComplete={activeHand.phase === 'complete'}
-            disableMidHandFeedback={disableMidHandFeedback}
-            timerSlot={timerSlot}
-            canPracticeSpot={canPracticeCurrentSpot}
-            onStageChip={handleStageChip}
-            onUnstageChip={handleUnstageChip}
-            onUndoLastChip={handleUndoLastChip}
-            onClearStaged={handleClearStaged}
-            onAction={handleHeroAction}
-            onDeclareOutOfTurn={handleHeroOutOfTurn}
-            onOpenExchange={() => setExchangeOpen(true)}
-            onRequestLeave={() => setSession((prev) => requestHeroLeave(prev))}
-            onPracticeSpot={
-              onPracticeSpot && activeHand
-                ? () => onPracticeSpot(activeHand, HERO_PLAYER_ID)
-                : undefined
-            }
-            onSettlePayout={handleSettlePayout}
-            onOpenReview={session.lastHandReview ? () => setReviewOpen(true) : undefined}
-            onNextHand={handleNextHand}
-          />
-        ) : session.boundary !== null ? (
-          <BoundaryPanel
-            boundary={session.boundary}
-            seatProfiles={session.seatProfiles}
-            hasPendingSettings={session.pendingSettings !== null}
-            onRebuyPlayer={(pid) => setSession((prev) => rebuyPlayerAtBoundary(prev, pid))}
-            onCashOutPlayer={(pid) => setSession((prev) => cashOutPlayerAtBoundary(prev, pid))}
-            onInviteRival={() => setSession((prev) => inviteRivalAtBoundary(prev))}
-            onSeatHeroBack={() => setSession((prev) => seatHeroAtBoundary(prev))}
-            onOpenExchange={() => setExchangeOpen(true)}
-            onStartNextHand={handleNextHand}
-            onOpenReview={session.lastHandReview ? () => setReviewOpen(true) : undefined}
-          />
-        ) : null}
+        <section
+          className="sb-seats-panel"
+          aria-label={`Danh sách ${seatsToRender.length} ghế trên bàn`}
+        >
+          <div className="sb-seats-panel__head">
+            <div className="sb-seats-panel__title">
+              <h2>Ghế trên bàn</h2>
+              <span className="sb-pill sb-pill--street sb-num">{seatsToRender.length} ghế</span>
+            </div>
+            <button
+              type="button"
+              className="sb-btn sb-btn--ghost sb-btn--xs sb-seats-panel__expand-all"
+              onClick={() => setExpandAllSeatDetails((prev) => !prev)}
+              aria-pressed={expandAllSeatDetails}
+            >
+              {expandAllSeatDetails ? 'Thu gọn chip' : 'Hiện chip tất cả'}
+            </button>
+          </div>
+
+          <div className="sb-seats-grid">
+            {seatsToRender.map((seat) => {
+              const inHandSeat = 'holeCards' in seat ? seat : null;
+              const isHero = seat.playerId === HERO_PLAYER_ID;
+              const metadata = getSeatRivalMetadata(session, seat.playerId);
+              const revealed =
+                inHandSeat !== null && activeHand !== null
+                  ? isSeatCardsRevealed(activeHand, seat.playerId)
+                  : false;
+
+              return (
+                <TableSeat
+                  key={seat.playerId}
+                  seatIndex={seat.seatIndex}
+                  playerId={seat.playerId}
+                  displayName={getPlayerName(seat.playerId, session.seatProfiles)}
+                  isHero={isHero}
+                  rivalMetadata={metadata}
+                  stack={seat.stack}
+                  holeCards={inHandSeat !== null ? inHandSeat.holeCards : null}
+                  cardsRevealed={revealed}
+                  status={inHandSeat !== null ? inHandSeat.status : 'active'}
+                  streetContribution={inHandSeat !== null ? inHandSeat.streetContribution : 0}
+                  isActiveTurn={
+                    activeHand !== null &&
+                    activeHand.phase === 'betting' &&
+                    activeHand.activePlayerId === seat.playerId
+                  }
+                  isDealer={
+                    activeHand !== null
+                      ? activeHand.dealerSeatIndex === seat.seatIndex
+                      : session.boundary?.lastDealerSeatIndex === seat.seatIndex
+                  }
+                  isOpener={
+                    activeHand !== null && activeHand.openerPlayerId === seat.playerId
+                  }
+                  declaration={inHandSeat !== null ? inHandSeat.declaration : null}
+                  isWinner={winnerIds.has(seat.playerId)}
+                  isBetweenHands={session.phase === 'between-hands'}
+                  terminology={lang}
+                  forceExpandDetails={expandAllSeatDetails}
+                  onBoundaryRebuy={
+                    session.phase === 'between-hands'
+                      ? (pid) => setSession((prev) => rebuyPlayerAtBoundary(prev, pid))
+                      : undefined
+                  }
+                  onBoundaryCashOut={
+                    session.phase === 'between-hands'
+                      ? (pid) => setSession((prev) => cashOutPlayerAtBoundary(prev, pid))
+                      : undefined
+                  }
+                />
+              );
+            })}
+          </div>
+        </section>
       </main>
 
       {exchangeOpen && (

@@ -1568,7 +1568,8 @@ export function applySettingsUpdate(
 
 /**
  * Starts the next hand from boundary (or transitions from a completed hand to boundary first).
- * Enforces T3 (no 0-chip seats), T4 (at least 4 seated players), and ante 5-chip availability.
+ * Enforces T3 (no 0-chip seats), T4 (auto-invites rivals from waiting list via `inviteRivalAtBoundary`
+ * to reach 4 seated players before collecting ante), and ante 5-chip availability.
  */
 export function startNextHand(
   session: SandboxSessionState,
@@ -1583,28 +1584,54 @@ export function startNextHand(
     return atBoundary;
   }
 
-  const boundary = atBoundary.boundary;
-  const readiness = checkReadyForNextHand(boundary);
+  let current = atBoundary;
+  const autoInvitedNames: string[] = [];
+  let autoInviteFailureNotice: SandboxSessionState['statusNotice'] = null;
+
+  // T4: Attempt to fill to 4 seated players via inviteRivalAtBoundary before collecting ante.
+  let readiness = checkReadyForNextHand(current.boundary!);
+  while (readiness.needsPlayers > 0) {
+    const beforeSeats = current.boundary!.seats;
+    const beforeIds = new Set(beforeSeats.map((s) => s.playerId));
+    const invited = inviteRivalAtBoundary(current);
+    if (invited.boundary === null || invited.boundary.seats.length <= beforeSeats.length) {
+      autoInviteFailureNotice = invited.statusNotice;
+      break;
+    }
+    const newlySeated = invited.boundary.seats.find((s) => !beforeIds.has(s.playerId));
+    if (newlySeated !== undefined) {
+      autoInvitedNames.push(getPlayerName(newlySeated.playerId, invited.seatProfiles));
+    }
+    current = invited;
+    readiness = checkReadyForNextHand(current.boundary!);
+  }
+
+  const boundary = current.boundary!;
   if (!readiness.ready) {
     const issues: string[] = [];
     if (readiness.needsPlayers > 0) {
-      issues.push(`Bàn chỉ còn ${readiness.playerCount} người — cần mời thêm ${readiness.needsPlayers} rival cho đủ 4 (T4).`);
+      const failureDetail = autoInviteFailureNotice
+        ? ` (${autoInviteFailureNotice.message}${autoInviteFailureNotice.guidance ? ` ${autoInviteFailureNotice.guidance}` : ''})`
+        : '';
+      issues.push(
+        `Bàn chỉ còn ${readiness.playerCount} người — cần mời thêm ${readiness.needsPlayers} rival cho đủ 4 (T4)${failureDetail}.`,
+      );
     }
     if (readiness.zeroStackPlayerIds.length > 0) {
       const names = readiness.zeroStackPlayerIds
-        .map((id) => getPlayerName(id, atBoundary.seatProfiles))
+        .map((id) => getPlayerName(id, current.seatProfiles))
         .join(', ');
       issues.push(`Ghế hết chip (0 điểm): ${names} — phải Rebuy 500 hoặc Rời bàn trước khi thu ante (T3).`);
     }
     if (readiness.missingAnteDenominationPlayerIds.length > 0) {
       const names = readiness.missingAnteDenominationPlayerIds
-        .map((id) => getPlayerName(id, atBoundary.seatProfiles))
+        .map((id) => getPlayerName(id, current.seatProfiles))
         .join(', ');
       issues.push(`Ghế thiếu chip mệnh giá 5 để đóng ante: ${names} — hãy Đổi chip trước khi chia ván mới.`);
     }
 
     return {
-      ...atBoundary,
+      ...current,
       statusNotice: {
         tone: 'warning',
         message: 'Chưa thể chia ván mới — cần xử lý ranh giới bàn trước.',
@@ -1613,9 +1640,9 @@ export function startNextHand(
     };
   }
 
-  const nextHandNumber = atBoundary.handNumber + 1;
+  const nextHandNumber = current.handNumber + 1;
   const dealerIndex = nextDealerArrayIndex(boundary);
-  const handRng = createRng(atBoundary.sessionSeed).fork(`hand-${nextHandNumber}`);
+  const handRng = createRng(current.sessionSeed).fork(`hand-${nextHandNumber}`);
 
   const started = startHand({
     seats: boundary.seats.map((s) => ({
@@ -1625,14 +1652,14 @@ export function startNextHand(
     })),
     bank: boundary.bank,
     rng: handRng.fork('engine'),
-    config: buildHandConfigFromSettings(atBoundary.appliedSettings, dealerIndex),
+    config: buildHandConfigFromSettings(current.appliedSettings, dealerIndex),
     fixtures,
   });
 
   if (!started.ok) {
     const translated = translateHandError(started.code, started.message);
     return {
-      ...atBoundary,
+      ...current,
       statusNotice: {
         tone: 'error',
         message: translated.message,
@@ -1642,18 +1669,24 @@ export function startNextHand(
   }
 
   const nextSession: SandboxSessionState = {
-    ...atBoundary,
+    ...current,
     handNumber: nextHandNumber,
     phase: 'in-hand',
     hand: started.state,
     boundary: null,
-    nongTiltStateAtHandStart: atBoundary.nongTiltState,
+    nongTiltStateAtHandStart: current.nongTiltState,
     stagedChips: emptyChips(),
     stagedHistory: [],
     heroDecisionsCurrentHand: [],
     ootContextKey: null,
     ootEvaluatedPlayers: [],
-    statusNotice: null,
+    statusNotice:
+      autoInvitedNames.length > 0
+        ? {
+            tone: 'info',
+            message: `Đã tự động mời ${autoInvitedNames.join(', ')} từ ghế chờ cho đủ 4 người (+500 từ kho, T4) trước khi chia ván #${nextHandNumber}.`,
+          }
+        : null,
   };
 
   if (started.state.phase === 'complete') {
