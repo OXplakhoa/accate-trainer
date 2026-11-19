@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { HandState } from '../../../engine';
 import { PlayingCard } from '../assets/PlayingCard';
+import { canPracticeDecisionRecord } from '../controller';
 import {
   formatEvVi,
   formatPercentVi,
@@ -102,13 +103,17 @@ export function HandReviewModal({
                   return (
                     <article key={item.record.decisionIndex} className="sb-decision-card">
                       <div className="sb-decision-card__head">
-                        <div>
+                        <div className="sb-decision-card__title">
                           <span className="sb-pill sb-pill--street">
                             {formatStreetLabel(snap.street, terminology)}
                           </span>
+                          <span
+                            className={`sb-pill ${item.record.fromOutOfTurn ? 'sb-pill--pending' : 'sb-pill--street'}`}
+                          >
+                            {item.turnLabelVi}
+                          </span>
                           <strong className="sb-decision-card__action">
                             {item.chosenActionLabel}
-                            {item.record.fromOutOfTurn ? ' (Hô sớm)' : ''}
                           </strong>
                         </div>
                         <span className={`sb-quality-badge sb-quality-badge--${item.qualityTone}`}>
@@ -123,7 +128,11 @@ export function HandReviewModal({
                           <PlayingCard card={snap.heroCards[1]} size="sm" />
                         </div>
                         <div className="sb-card-strip">
-                          <span className="sb-label">Board lúc quyết định:</span>
+                          <span className="sb-label">
+                            {item.record.fromOutOfTurn
+                              ? 'Board lúc hô trước:'
+                              : 'Board lúc quyết định:'}
+                          </span>
                           {snap.board.length === 0 ? (
                             <span className="sb-muted">Chưa lật (Preflop)</span>
                           ) : (
@@ -179,7 +188,7 @@ export function HandReviewModal({
                         </ul>
                       </details>
 
-                      {onPracticeSpot && (
+                      {onPracticeSpot && canPracticeDecisionRecord(item.record) && (
                         <div className="sb-decision-card__footer">
                           <button
                             type="button"

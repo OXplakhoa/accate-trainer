@@ -40,12 +40,14 @@ import {
   updateNongTiltStateAtBoundary,
   type BettingAction,
   type ChipCounts,
+  type DecisionSnapshot,
   type Denomination,
   type HandExchangeRequest,
   type HandFixtures,
   type HandState,
   type LedgerEvent,
   type LegalActions,
+  type OutOfTurnDeclaration,
   type PublicSeatView,
   type RivalId,
   type RivalSeatMetadata,
@@ -67,6 +69,7 @@ import {
   HERO_PLAYER_ID,
   type HeroActionValidation,
   type HeroDecisionRecord,
+  type PendingHeroOutOfTurnDecision,
   type SandboxSessionState,
   type SandboxSettings,
   type SeatProfileInfo,
@@ -215,6 +218,7 @@ function finalizeCompletedHand(
     ...session,
     hand: completedHand,
     nongTiltState: nextTiltState,
+    pendingHeroOutOfTurnDecision: null,
     heroDecisionsCurrentHand: decisions,
     lastHandReview: review,
     stagedChips: emptyChips(),
@@ -223,23 +227,33 @@ function finalizeCompletedHand(
 
   // T2: If hero requested leave mid-hand, transition to boundary and cash out hero now.
   if (session.pendingHeroLeave) {
-    const boundaryRes = createBoundaryFromHand(completedHand);
-    if (boundaryRes.ok) {
-      const leaveRes = leaveTableAtBoundary(boundaryRes.state, HERO_PLAYER_ID);
-      if (leaveRes.ok) {
-        const returnedVal = chipValue(leaveRes.returnedChips);
-        nextSession = {
-          ...nextSession,
-          phase: 'between-hands',
-          boundary: leaveRes.state,
-          ledgerEvents: [...nextSession.ledgerEvents, ...leaveRes.ledgerEvents],
-          pendingHeroLeave: false,
-          statusNotice: {
-            tone: 'info',
-            message: `Bạn đã rời bàn ở ranh giới ván #${session.handNumber} và cash out ${returnedVal} điểm về kho.`,
-            guidance: 'Các chip đã góp vào pot trong ván vừa rồi được giữ đúng luật. Bạn có thể ngồi lại bàn (+500) hoặc xem Sổ phiên.',
-          },
-        };
+    const heroSeatedInCompleted = completedHand.seats.some(
+      (s) => s.playerId === HERO_PLAYER_ID,
+    );
+    if (!heroSeatedInCompleted) {
+      nextSession = {
+        ...nextSession,
+        pendingHeroLeave: false,
+      };
+    } else {
+      const boundaryRes = createBoundaryFromHand(completedHand);
+      if (boundaryRes.ok) {
+        const leaveRes = leaveTableAtBoundary(boundaryRes.state, HERO_PLAYER_ID);
+        if (leaveRes.ok) {
+          const returnedVal = chipValue(leaveRes.returnedChips);
+          nextSession = {
+            ...nextSession,
+            phase: 'between-hands',
+            boundary: leaveRes.state,
+            ledgerEvents: [...nextSession.ledgerEvents, ...leaveRes.ledgerEvents],
+            pendingHeroLeave: false,
+            statusNotice: {
+              tone: 'info',
+              message: `Bạn đã rời bàn ở ranh giới ván #${session.handNumber} và cash out ${returnedVal} điểm về kho.`,
+              guidance: 'Các chip đã góp vào pot trong ván vừa rồi được giữ đúng luật. Bạn có thể ngồi lại bàn (+500) hoặc xem Sổ phiên.',
+            },
+          };
+        }
       }
     }
   }
@@ -336,6 +350,7 @@ export function createSandboxSession(options?: {
     stagedChips: emptyChips(),
     stagedHistory: [],
     pendingHeroLeave: false,
+    pendingHeroOutOfTurnDecision: null,
     heroDecisionsCurrentHand: [],
     lastHandReview: null,
     stepCounter: 0,
@@ -559,13 +574,65 @@ export function getHeroActionValidation(session: SandboxSessionState): HeroActio
   };
 }
 
+function chipsEqual(a: ChipCounts, b: ChipCounts): boolean {
+  return a[5] === b[5] && a[10] === b[10] && a[50] === b[50] && a[100] === b[100];
+}
+
+function bettingActionsEqual(a: BettingAction, b: BettingAction): boolean {
+  if (a.type !== b.type) {
+    return false;
+  }
+  switch (a.type) {
+    case 'fold':
+    case 'check':
+      return true;
+    case 'call':
+      return b.type === 'call' && chipsEqual(a.chips, b.chips);
+    case 'bet':
+      return b.type === 'bet' && a.amount === b.amount && chipsEqual(a.chips, b.chips);
+    case 'raise':
+      return b.type === 'raise' && a.raiseTo === b.raiseTo && chipsEqual(a.chips, b.chips);
+  }
+}
+
+function matchesPendingDeclaration(
+  pending: PendingHeroOutOfTurnDecision,
+  declaration: OutOfTurnDeclaration,
+): boolean {
+  return (
+    pending.declaration.playerId === declaration.playerId &&
+    pending.declaration.street === declaration.street &&
+    pending.declaration.declaredAtCurrentBet === declaration.declaredAtCurrentBet &&
+    bettingActionsEqual(pending.declaration.action, declaration.action) &&
+    chipsEqual(pending.declaration.reservedChips, declaration.reservedChips)
+  );
+}
+
+function buildDecisionSnapshot(hand: HandState, fromOutOfTurn: boolean): DecisionSnapshot {
+  const rawSnapshot = extractDecisionSnapshot(hand, HERO_PLAYER_ID);
+  if (!fromOutOfTurn || rawSnapshot.legalActions !== null) {
+    return rawSnapshot;
+  }
+  const publicLegalActions = computePublicLegalActionsForSeat(
+    projectPublicSeats(hand),
+    HERO_PLAYER_ID,
+    hand.street,
+    hand.streetCap,
+    hand.currentBet,
+  );
+  return Object.freeze({
+    ...rawSnapshot,
+    legalActions: publicLegalActions,
+  });
+}
+
 function captureHeroDecisionRecord(
   hand: HandState,
   chosenAction: BettingAction,
   decisionIndex: number,
   fromOutOfTurn: boolean,
 ): HeroDecisionRecord {
-  const snapshot = extractDecisionSnapshot(hand, HERO_PLAYER_ID);
+  const snapshot = buildDecisionSnapshot(hand, fromOutOfTurn);
   const potOdds = calculatePotOddsFromSnapshot(snapshot);
   const activeOpponentIds = hand.seats
     .filter((s) => s.playerId !== HERO_PLAYER_ID && s.status !== 'folded')
@@ -582,6 +649,60 @@ function captureHeroDecisionRecord(
     activeOpponentIds: Object.freeze(activeOpponentIds),
     timelineLengthAtDecision: hand.timeline.length,
   });
+}
+
+function capturePendingHeroOutOfTurnDecision(
+  preDeclareHand: HandState,
+  declaration: OutOfTurnDeclaration,
+): PendingHeroOutOfTurnDecision {
+  const snapshot = buildDecisionSnapshot(preDeclareHand, true);
+  const potOdds = calculatePotOddsFromSnapshot(snapshot);
+  const activeOpponentIds = preDeclareHand.seats
+    .filter((s) => s.playerId !== HERO_PLAYER_ID && s.status !== 'folded')
+    .map((s) => s.playerId);
+
+  return Object.freeze({
+    declaration,
+    snapshot,
+    handStateAtDecision: preDeclareHand,
+    potOdds,
+    activeOpponentIds: Object.freeze(activeOpponentIds),
+    timelineLengthAtDecision: preDeclareHand.timeline.length,
+  });
+}
+
+function materializeHeroDecisionFromPending(
+  pending: PendingHeroOutOfTurnDecision,
+  decisionIndex: number,
+): HeroDecisionRecord {
+  return Object.freeze({
+    decisionIndex,
+    street: pending.declaration.street,
+    snapshot: pending.snapshot,
+    handStateAtDecision: pending.handStateAtDecision,
+    chosenAction: pending.declaration.action,
+    fromOutOfTurn: true,
+    potOdds: pending.potOdds,
+    activeOpponentIds: pending.activeOpponentIds,
+    timelineLengthAtDecision: pending.timelineLengthAtDecision,
+  });
+}
+
+/**
+ * Guard for the Review -> Drill jump button:
+ * Only offers Drill practice when the stored hand state is Hero's actual turn
+ * with valid normal legal actions (never sends an out-of-turn or bot-turn `HandState`).
+ */
+export function canPracticeDecisionRecord(record: HeroDecisionRecord): boolean {
+  if (record.fromOutOfTurn) {
+    return false;
+  }
+  const hand = record.handStateAtDecision;
+  if (hand.phase !== 'betting' || hand.activePlayerId !== HERO_PLAYER_ID) {
+    return false;
+  }
+  const legal = getLegalActions(hand);
+  return legal !== null && legal.playerId === HERO_PLAYER_ID;
 }
 
 function makeActionForHero(
@@ -675,6 +796,7 @@ export function performHeroAction(
     hand: result.state,
     stagedChips: emptyChips(),
     stagedHistory: [],
+    pendingHeroOutOfTurnDecision: null,
     heroDecisionsCurrentHand: nextDecisions,
     stepCounter: session.stepCounter + 1,
     ootContextKey: resetOot ? nextContextKey : session.ootContextKey,
@@ -690,6 +812,8 @@ export function performHeroAction(
 
 /**
  * Declares an out-of-turn action for Hero (X4–X6, D39c).
+ * Captures Hero's public decision-time snapshot BEFORE `declareOutOfTurn` reserves chips
+ * so end-of-hand review grades strictly on the information at declaration time (Spec §5).
  */
 export function performHeroOutOfTurn(
   session: SandboxSessionState,
@@ -705,7 +829,8 @@ export function performHeroOutOfTurn(
     return session;
   }
 
-  const result = declareOutOfTurn(session.hand, HERO_PLAYER_ID, action);
+  const preDeclareHand = session.hand;
+  const result = declareOutOfTurn(preDeclareHand, HERO_PLAYER_ID, action);
   if (!result.ok) {
     const translated = translateHandError(result.code, result.message);
     return {
@@ -718,11 +843,17 @@ export function performHeroOutOfTurn(
     };
   }
 
+  const heroDecl =
+    result.state.seats.find((s) => s.playerId === HERO_PLAYER_ID)?.declaration ?? null;
+  const pendingDecision =
+    heroDecl !== null ? capturePendingHeroOutOfTurnDecision(preDeclareHand, heroDecl) : null;
+
   return {
     ...session,
     hand: result.state,
     stagedChips: emptyChips(),
     stagedHistory: [],
+    pendingHeroOutOfTurnDecision: pendingDecision,
     statusNotice: {
       tone: 'info',
       message: 'Đã hô trước lượt! Chip đã đẩy ra trước mặt (chưa vào pot) và sẽ tự thực hiện nếu mức cược không đổi.',
@@ -767,14 +898,26 @@ export function performHeroAutoTimeout(session: SandboxSessionState): SandboxSes
  * Handles Hero requesting to leave table (T1 between hands, T2 mid-hand).
  * Mid-hand: marks `pendingHeroLeave`, folds at the first legal opportunity,
  * keeps contributed chips in pot, and cashes out Hero's remaining stack at hand boundary.
+ * Guarded so a spectating Hero (not seated) can never enter `pendingHeroLeave`.
  */
 export function requestHeroLeave(session: SandboxSessionState): SandboxSessionState {
   if (session.phase === 'between-hands' && session.boundary !== null) {
+    const heroSeatedAtBoundary = session.boundary.seats.some(
+      (s) => s.playerId === HERO_PLAYER_ID,
+    );
+    if (!heroSeatedAtBoundary) {
+      return session.pendingHeroLeave ? { ...session, pendingHeroLeave: false } : session;
+    }
     return cashOutPlayerAtBoundary(session, HERO_PLAYER_ID);
   }
 
   if (session.phase !== 'in-hand' || session.hand === null) {
-    return session;
+    return session.pendingHeroLeave ? { ...session, pendingHeroLeave: false } : session;
+  }
+
+  const heroSeatedInHand = session.hand.seats.some((s) => s.playerId === HERO_PLAYER_ID);
+  if (!heroSeatedInHand) {
+    return session.pendingHeroLeave ? { ...session, pendingHeroLeave: false } : session;
   }
 
   if (session.hand.phase === 'complete') {
@@ -939,48 +1082,69 @@ function stepActiveRivalTurn(
         },
       };
     }
-    return finishBotStep(session, preHand, fallbackApplied);
+    return finishBotStep(session, fallbackApplied);
   }
 
-  return finishBotStep(session, preHand, applied);
+  return finishBotStep(session, applied);
 }
 
 function finishBotStep(
   session: SandboxSessionState,
-  preHand: HandState,
   applied: Extract<ReturnType<typeof applyAction>, { ok: true }>,
 ): SandboxSessionState {
   let nextDecisions = session.heroDecisionsCurrentHand;
+  let nextPendingOot = session.pendingHeroOutOfTurnDecision;
 
-  // If Hero had a binding out-of-turn declaration that auto-executed on this step, record it for review
+  // Resolve Hero's pending out-of-turn declaration strictly from the snapshot captured at declare time.
   const heroAutoExec = applied.autoExecutedDeclarations.find(
     (d) => d.playerId === HERO_PLAYER_ID,
   );
-  if (heroAutoExec !== undefined) {
-    nextDecisions = [
-      ...nextDecisions,
-      captureHeroDecisionRecord(
-        preHand,
-        heroAutoExec.action,
-        nextDecisions.length,
-        true,
-      ),
-    ];
-  }
-
   const heroCancelled = applied.cancelledDeclarations.find(
     (d) => d.playerId === HERO_PLAYER_ID,
   );
+  const heroStillHasDeclaration = applied.state.seats.some(
+    (s) => s.playerId === HERO_PLAYER_ID && s.declaration !== null,
+  );
+
+  if (heroAutoExec !== undefined) {
+    if (
+      nextPendingOot !== null &&
+      matchesPendingDeclaration(nextPendingOot, heroAutoExec)
+    ) {
+      nextDecisions = [
+        ...nextDecisions,
+        materializeHeroDecisionFromPending(nextPendingOot, nextDecisions.length),
+      ];
+    }
+    nextPendingOot = null;
+  } else if (heroCancelled !== undefined || !heroStillHasDeclaration) {
+    // Release any pending record when cancelled or no longer active so it is never attached to another action.
+    nextPendingOot = null;
+  }
 
   const nextContextKey = `${session.handNumber}:${applied.state.street}:${applied.state.currentBet}`;
   const resetOot = nextContextKey !== session.ootContextKey;
 
   let notice = session.statusNotice;
   if (heroCancelled !== undefined) {
+    const cancelEvent = applied.events.find(
+      (ev) => ev.type === 'out-of-turn-cancelled' && ev.playerId === HERO_PLAYER_ID,
+    );
+    const reason =
+      cancelEvent !== undefined && cancelEvent.type === 'out-of-turn-cancelled'
+        ? cancelEvent.reason
+        : 'bet-changed';
+    const cancelMessage =
+      reason === 'bet-changed'
+        ? 'Lời hô trước của bạn đã bị hủy vì mức cược thay đổi — chip đã trả về stack, bạn được quyết định lại tự do!'
+        : reason === 'action-no-longer-legal'
+          ? 'Lời hô trước của bạn đã bị hủy vì hành động không còn hợp lệ khi tới lượt — chip đã trả về stack.'
+          : reason === 'street-ended'
+            ? 'Lời hô trước của bạn đã bị hủy vì vòng cược đã kết thúc — chip đã trả về stack.'
+            : 'Lời hô trước của bạn đã bị hủy vì ván đã kết thúc — chip đã trả về stack.';
     notice = {
       tone: 'warning',
-      message:
-        'Lời hô trước của bạn đã bị hủy vì mức cược thay đổi — chip đã trả về stack, bạn được quyết định lại tự do!',
+      message: cancelMessage,
     };
   } else if (applied.state.phase === 'awaiting-payout') {
     notice = {
@@ -993,6 +1157,7 @@ function finishBotStep(
   const updated: SandboxSessionState = {
     ...session,
     hand: applied.state,
+    pendingHeroOutOfTurnDecision: nextPendingOot,
     heroDecisionsCurrentHand: nextDecisions,
     stepCounter: session.stepCounter + 1,
     ootContextKey: resetOot ? nextContextKey : session.ootContextKey,
@@ -1131,6 +1296,7 @@ export function enterHandBoundary(session: SandboxSessionState): SandboxSessionS
     boundary: boundaryRes.state,
     stagedChips: emptyChips(),
     stagedHistory: [],
+    pendingHeroOutOfTurnDecision: null,
   };
 
   return reconcilePendingSettingsAtBoundary(atBoundary);
@@ -1506,6 +1672,45 @@ export function seatHeroAtBoundary(session: SandboxSessionState): SandboxSession
 }
 
 /**
+ * Toggles master audio mute immediately on `appliedSettings` AND keeps any queued
+ * `pendingSettings` in sync so the mute state is not reverted at the next hand boundary.
+ */
+export function toggleAudioMute(session: SandboxSessionState): SandboxSessionState {
+  const nextMuted = !session.appliedSettings.audio.muted;
+  const nextAppliedSettings: SandboxSettings = Object.freeze({
+    ...session.appliedSettings,
+    audio: Object.freeze({
+      ...session.appliedSettings.audio,
+      muted: nextMuted,
+    }),
+  });
+  const nextPendingSettings: SandboxSettings | null =
+    session.pendingSettings !== null
+      ? Object.freeze({
+          ...session.pendingSettings,
+          audio: Object.freeze({
+            ...session.pendingSettings.audio,
+            muted: nextMuted,
+          }),
+        })
+      : null;
+
+  return {
+    ...session,
+    appliedSettings: nextAppliedSettings,
+    pendingSettings: nextPendingSettings,
+  };
+}
+
+/**
+ * Returns the canonical settings object to persist to storage (preserving queued
+ * table-rule changes for the next hand while reflecting immediate UI/audio edits).
+ */
+export function getPersistedSettingsForSession(session: SandboxSessionState): SandboxSettings {
+  return session.pendingSettings ?? session.appliedSettings;
+}
+
+/**
  * Applies settings changes:
  * - UI preferences (motion, audio, terminology, bot pacing, pauseOnImportantSpot) apply immediately.
  * - Table/rule settings apply at hand boundary (queued in `pendingSettings` if mid-hand),
@@ -1677,6 +1882,8 @@ export function startNextHand(
     nongTiltStateAtHandStart: current.nongTiltState,
     stagedChips: emptyChips(),
     stagedHistory: [],
+    pendingHeroLeave: false,
+    pendingHeroOutOfTurnDecision: null,
     heroDecisionsCurrentHand: [],
     ootContextKey: null,
     ootEvaluatedPlayers: [],

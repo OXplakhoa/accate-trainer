@@ -230,9 +230,15 @@ function evaluateHeroDecision(
 
   const effectiveEquity = estimatedEquity ?? 0.5;
   const candidates: CandidateEv[] = [];
+  const turnLabelVi = record.fromOutOfTurn ? 'Hô trước lượt' : 'Đúng lượt';
   const assumptionsVi: string[] = [
     `Street: ${formatStreetLabel(snapshot.street, lang)} · Cap street: ${snapshot.streetCap} điểm.`,
-    `Pot trước lượt: ${snapshot.potBeforeCall} · Stack Hero: ${snapshot.heroStack} · Vị trí: ${snapshot.position.label ?? '—'}.`,
+    record.fromOutOfTurn
+      ? 'Thời điểm quyết định: Hô trước lượt (được tự động thực hiện khi tới lượt; chấm theo thông tin công khai lúc hô trước khi reserve chip).'
+      : 'Thời điểm quyết định: Đúng lượt.',
+    record.fromOutOfTurn
+      ? `Pot lúc hô trước: ${snapshot.potBeforeCall} · Stack Hero (trước reserve): ${snapshot.heroStack} · Vị trí: ${snapshot.position.label ?? '—'}.`
+      : `Pot trước lượt: ${snapshot.potBeforeCall} · Stack Hero: ${snapshot.heroStack} · Vị trí: ${snapshot.position.label ?? '—'}.`,
     `Số đối thủ còn trong ván: ${snapshot.activeOpponentCount}${record.activeOpponentIds.length > MAX_SIMULATED_OPPONENTS ? ` (mô phỏng ${prioritizedOppIds.length} đối thủ chính để giữ tốc độ)` : ''}.`,
   ];
 
@@ -295,7 +301,10 @@ function evaluateHeroDecision(
     chosenAction.type === 'fold' || chosenAction.type === 'check'
       ? 0
       : chipValue(chosenAction.chips);
-  const chosenActionLabel = formatBettingActionShort(chosenAction, lang, addedFromChosen);
+  const baseActionLabel = formatBettingActionShort(chosenAction, lang, addedFromChosen);
+  const chosenActionLabel = record.fromOutOfTurn
+    ? `${baseActionLabel} (Hô trước lượt)`
+    : baseActionLabel;
 
   if (chosenAction.type === 'fold') {
     chosenEv = foldEv.ev;
@@ -331,7 +340,7 @@ function evaluateHeroDecision(
       chosenEv = brRes.ev;
       chosenEvPrecision = 'estimated';
       candidates.push({
-        label: chosenActionLabel,
+        label: baseActionLabel,
         ev: brRes.ev,
         precision: 'estimated',
       });
@@ -365,18 +374,22 @@ function evaluateHeroDecision(
 
   const evDiff = chosenEv - best.ev;
   let explanationVi: string;
+  const actionVerb = record.fromOutOfTurn
+    ? `Bạn đã hô trước ${baseActionLabel}`
+    : `Bạn chọn ${baseActionLabel}`;
+  const timingContext = record.fromOutOfTurn ? ' tại lúc hô trước' : '';
   if (potOdds.hasCall && estimatedEquity !== null) {
     const eqText = formatPercentVi(estimatedEquity);
     const reqText = formatPercentVi(potOdds.requiredEquity);
     explanationVi =
-      `Cần ${reqText} (${potOdds.potToCallLabel}) để hòa vốn call; equity ước lượng trước range đối thủ là ${eqText}. ` +
-      `Bạn chọn ${chosenActionLabel} (${formatEvVi(chosenEv)}), lựa chọn cao nhất tham chiếu: ${best.label} (${formatEvVi(best.ev)}).`;
+      `Cần ${reqText} (${potOdds.potToCallLabel}) để hòa vốn call${timingContext}; equity ước lượng trước range đối thủ là ${eqText}. ` +
+      `${actionVerb} (${formatEvVi(chosenEv)}), lựa chọn cao nhất tham chiếu: ${best.label} (${formatEvVi(best.ev)}).`;
   } else if (estimatedEquity !== null) {
     explanationVi =
-      `Không bị bet (equity ước lượng ${formatPercentVi(estimatedEquity)}). ` +
-      `Bạn chọn ${chosenActionLabel} (${formatEvVi(chosenEv)}); phương án tham chiếu cao nhất: ${best.label} (${formatEvVi(best.ev)}).`;
+      `Không bị bet${timingContext} (equity ước lượng ${formatPercentVi(estimatedEquity)}). ` +
+      `${actionVerb} (${formatEvVi(chosenEv)}); phương án tham chiếu cao nhất: ${best.label} (${formatEvVi(best.ev)}).`;
   } else {
-    explanationVi = `Bạn chọn ${chosenActionLabel} với EV ước lượng ${formatEvVi(chosenEv)}.`;
+    explanationVi = `${actionVerb} với EV ước lượng ${formatEvVi(chosenEv)}.`;
   }
 
   return Object.freeze({
@@ -385,6 +398,7 @@ function evaluateHeroDecision(
     equitySamples,
     equitySeed: equityRng.seed,
     chosenActionLabel,
+    turnLabelVi,
     chosenEv,
     chosenEvPrecision,
     bestAlternativeLabel: best.label,

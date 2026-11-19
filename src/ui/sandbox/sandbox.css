@@ -1449,6 +1449,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 .accate-sandbox .sb-decision-card__head,
@@ -1460,8 +1461,16 @@
   gap: 8px;
 }
 
+.accate-sandbox .sb-decision-card__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .accate-sandbox .sb-decision-card__action {
-  margin-left: 8px;
+  overflow-wrap: anywhere;
 }
 
 .accate-sandbox .sb-quality-badge {
@@ -1498,18 +1507,22 @@
 .accate-sandbox .sb-decision-card__cards {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 10px 14px;
+  min-width: 0;
 }
 
 .accate-sandbox .sb-card-strip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .accate-sandbox .sb-metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
   gap: 8px;
 }
 
@@ -1552,8 +1565,9 @@
 
 .accate-sandbox .sb-showdown-hand-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
   font-size: 0.88rem;
 }
 
@@ -1565,6 +1579,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
 }
 
 .accate-sandbox .sb-baicao-box h5 {
@@ -1588,11 +1603,16 @@
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .accate-sandbox .sb-baicao-cards {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 4px;
+  max-width: 100%;
 }
 
 .accate-sandbox .sb-timeline-list {
@@ -1611,6 +1631,8 @@
   background: rgba(16, 24, 21, 0.5);
   border-radius: 8px;
   font-size: 0.86rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .accate-sandbox .sb-timeline-item--out-of-turn-declared,
@@ -2006,5 +2028,25 @@
 
   .accate-sandbox .sb-seat__quick-meta {
     margin-left: auto;
+  }
+
+  .accate-sandbox .sb-modal-backdrop {
+    padding: 8px;
+  }
+
+  .accate-sandbox .sb-modal__header,
+  .accate-sandbox .sb-modal__body,
+  .accate-sandbox .sb-modal__footer {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .accate-sandbox .sb-decision-card,
+  .accate-sandbox .sb-pot-award-card {
+    padding: 10px;
+  }
+
+  .accate-sandbox .sb-card-strip {
+    gap: 4px;
   }
 }

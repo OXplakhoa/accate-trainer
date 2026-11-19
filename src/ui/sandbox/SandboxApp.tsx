@@ -31,6 +31,7 @@ import {
   exchangeInHand,
   getAvailableHeroStackAfterStaged,
   getHeroActionValidation,
+  getPersistedSettingsForSession,
   getSeatRivalMetadata,
   inviteRivalAtBoundary,
   isSeatCardsRevealed,
@@ -44,6 +45,7 @@ import {
   stageChip,
   startNextHand,
   stepOneBotTurn,
+  toggleAudioMute,
   unstageChip,
   unstageLastChip,
 } from './controller';
@@ -55,7 +57,7 @@ import {
   getPlayerName,
   tTerm,
 } from './format';
-import { loadSandboxSettings, saveSandboxSettings } from './settings';
+import { loadSandboxSettings, sanitizeSettings, saveSandboxSettings } from './settings';
 import {
   HERO_PLAYER_ID,
   type SandboxAppProps,
@@ -140,6 +142,7 @@ export function SandboxApp({
 
   const processedTurnKeyRef = useRef<string | null>(null);
   const lastDealKeyRef = useRef<string | null>(null);
+  const lastAudioSessionSeedRef = useRef<string>(session.sessionSeed);
 
   const effectiveReducedMotion = session.appliedSettings.reducedMotion || systemReducedMotion;
   const lang = session.appliedSettings.terminology;
@@ -175,20 +178,24 @@ export function SandboxApp({
     audioRef.current?.unlockFromUserGesture();
   }, []);
 
-  // Play deduplicated timeline event sounds
+  // Play deduplicated timeline event sounds (resetting dedup when starting a new session)
   useEffect(() => {
-    const hand = session.hand;
-    if (session.phase !== 'in-hand' || hand === null) {
-      return;
-    }
     const engine = audioRef.current;
     if (!engine) {
+      return;
+    }
+    if (lastAudioSessionSeedRef.current !== session.sessionSeed) {
+      engine.clearPlayedHistory();
+      lastAudioSessionSeedRef.current = session.sessionSeed;
+    }
+    const hand = session.hand;
+    if (session.phase !== 'in-hand' || hand === null) {
       return;
     }
     hand.timeline.forEach((ev, idx) => {
       engine.playTimelineEventOnce(`${session.handNumber}:${idx}`, ev);
     });
-  }, [session.phase, session.handNumber, session.hand]);
+  }, [session.sessionSeed, session.phase, session.handNumber, session.hand]);
 
   // Observable deal / reveal animation lifecycle (O3 readiness for P5 Tournament)
   const handRefForDeal = session.hand;
@@ -445,29 +452,26 @@ export function SandboxApp({
   const handleApplySettings = useCallback(
     (next: SandboxSettings, applyMode: 'apply-boundary' | 'new-session') => {
       unlockAudio();
-      saveSandboxSettings(next, storage);
+      const { settings: sanitized } = sanitizeSettings(next);
+      audioRef.current?.updateSettings(sanitized.audio);
+      if (applyMode === 'new-session') {
+        audioRef.current?.clearPlayedHistory();
+        lastDealKeyRef.current = null;
+      }
+      saveSandboxSettings(sanitized, storage);
       processedTurnKeyRef.current = null;
-      setSession((prev) => applySettingsUpdate(prev, next, applyMode));
+      setSession((prev) => applySettingsUpdate(prev, sanitized, applyMode));
     },
     [storage, unlockAudio],
   );
 
   const handleToggleMute = useCallback(() => {
     unlockAudio();
-    setSession((prev) => {
-      const nextSettings: SandboxSettings = {
-        ...prev.appliedSettings,
-        audio: {
-          ...prev.appliedSettings.audio,
-          muted: !prev.appliedSettings.audio.muted,
-        },
-      };
-      saveSandboxSettings(nextSettings, storage);
-      return {
-        ...prev,
-        appliedSettings: nextSettings,
-      };
-    });
+    const next = toggleAudioMute(sessionRef.current);
+    sessionRef.current = next;
+    audioRef.current?.updateSettings(next.appliedSettings.audio);
+    saveSandboxSettings(getPersistedSettingsForSession(next), storage);
+    setSession(next);
   }, [storage, unlockAudio]);
 
   const handleTestAudio = useCallback(
@@ -554,7 +558,8 @@ export function SandboxApp({
     activeHand !== null &&
     activeHand.phase === 'betting' &&
     heroSeat !== null &&
-    activeHand.activePlayerId === HERO_PLAYER_ID;
+    activeHand.activePlayerId === HERO_PLAYER_ID &&
+    getLegalActions(activeHand) !== null;
 
   const importantSpotBanner =
     !disableMidHandFeedback &&
@@ -787,6 +792,7 @@ export function SandboxApp({
               potValue={potValue}
               streetCap={activeHand.streetCap}
               terminology={lang}
+              isHeroSeated={heroSeat !== null}
               pendingHeroLeave={session.pendingHeroLeave}
               isAwaitingPayout={activeHand.phase === 'awaiting-payout'}
               isHandComplete={activeHand.phase === 'complete'}
@@ -926,7 +932,10 @@ export function SandboxApp({
           hasPracticeSpotCallback={onPracticeSpot !== undefined}
           onApply={handleApplySettings}
           onTestAudio={handleTestAudio}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => {
+            audioRef.current?.updateSettings(sessionRef.current.appliedSettings.audio);
+            setSettingsOpen(false);
+          }}
         />
       )}
 

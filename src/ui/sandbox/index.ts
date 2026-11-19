@@ -8,6 +8,7 @@ export type {
   HeroDecisionRecord,
   HeroDecisionReview,
   HeroTurnChangeInfo,
+  PendingHeroOutOfTurnDecision,
   SandboxAppProps,
   SandboxExternalApi,
   SandboxSessionState,
@@ -31,6 +32,7 @@ export {
 } from './settings';
 export {
   applySettingsUpdate,
+  canPracticeDecisionRecord,
   cashOutPlayerAtBoundary,
   clearStagedChips,
   createSandboxSession,
@@ -40,6 +42,7 @@ export {
   generateUiSeed,
   getAvailableHeroStackAfterStaged,
   getHeroActionValidation,
+  getPersistedSettingsForSession,
   getSeatRivalMetadata,
   inviteRivalAtBoundary,
   isSeatCardsRevealed,
@@ -53,6 +56,7 @@ export {
   stageChip,
   startNextHand,
   stepOneBotTurn,
+  toggleAudioMute,
   unstageChip,
   unstageLastChip,
   verifySessionInvariants,

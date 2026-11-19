@@ -13,26 +13,31 @@ import {
 } from '../../../src/engine';
 import {
   applySettingsUpdate,
+  canPracticeDecisionRecord,
   cashOutPlayerAtBoundary,
   createSandboxSession,
   enterHandBoundary,
   exchangeAtBoundary,
   exchangeInHand,
   getHeroActionValidation,
+  getPersistedSettingsForSession,
   getSeatRivalMetadata,
   HERO_PLAYER_ID,
   inviteRivalAtBoundary,
   isSeatCardsRevealed,
+  loadSandboxSettings,
   performHeroAction,
   performHeroAutoTimeout,
   performHeroOutOfTurn,
   rebuyPlayerAtBoundary,
   requestHeroLeave,
+  saveSandboxSettings,
   seatHeroAtBoundary,
   settleAwaitingPayout,
   stageChip,
   startNextHand,
   stepOneBotTurn,
+  toggleAudioMute,
   unstageLastChip,
   verifySessionInvariants,
   type SandboxSessionState,
@@ -1100,5 +1105,485 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     expect(blockedNoDeposit.boundary!.seats.length).toBe(3);
     expect(blockedNoDeposit.statusNotice?.tone).toBe('warning');
     expect(blockedNoDeposit.statusNotice?.guidance).toContain('Bàn chỉ còn 3 người');
+  });
+
+  it('OOT decision snapshot: captures pre-reserve heroStack/pot/legal context on declare, auto-executes after bot call or fold, and blocks Drill jump for bot-turn state', () => {
+    const stageAmountForHero = (
+      sess: SandboxSessionState,
+      amount: number,
+    ): SandboxSessionState => {
+      let rem = amount;
+      let next = sess;
+      const stack = sess.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack;
+      for (const denom of [100, 50, 10, 5] as const) {
+        const take = Math.min(stack[denom], Math.floor(rem / denom));
+        for (let i = 0; i < take; i++) {
+          next = stageChip(next, denom);
+        }
+        rem -= take * denom;
+      }
+      expect(rem).toBe(0);
+      return next;
+    };
+
+    const finishHandHeroCheckFold = (sess: SandboxSessionState): SandboxSessionState => {
+      let cur = sess;
+      let guard = 0;
+      while (cur.phase === 'in-hand' && cur.hand?.phase === 'betting' && guard < 120) {
+        guard++;
+        if (cur.hand.activePlayerId === HERO_PLAYER_ID) {
+          const val = getHeroActionValidation(cur);
+          cur = performHeroAction(cur, val.canCheck ? 'check' : 'fold');
+        } else {
+          cur = stepOneBotTurn(cur);
+        }
+        assertInvariants(cur, `finish oot hand step ${guard}`);
+      }
+      return cur;
+    };
+
+    // --- Part A: Auto-execute Hero OOT Call right after intermediate bot CALLS ---
+    // Probe seat order for a 4-seat table with ['dien', 'ca', 'da'] so we place opener 2 seats before Hero
+    // and place 'ca' (calling station) immediately before Hero, or pick a seed where 'ca' is right before Hero.
+    let callSeed = '';
+    let callSeatOrder: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const candidateSeed = `p4-oot-after-call-${i}`;
+      const probe = createSandboxSession({
+        seed: candidateSeed,
+        settings: {
+          playerCount: 4,
+          enabledRivalIds: ['dien', 'ca', 'da'],
+          allowOutOfTurn: true,
+        },
+      });
+      const order = probe.hand!.seats.map((seat) => seat.playerId);
+      // Hero is seat 0 -> seat 2 is opener (2 before hero), seat 3 is immediate actor before hero
+      if (order[2] === 'dien' && order[3] === 'ca') {
+        callSeed = candidateSeed;
+        callSeatOrder = order;
+        break;
+      }
+    }
+    expect(callSeed).not.toBe('');
+
+    const callDeck = buildFixtureDeck({
+      seatOrderIds: callSeatOrder,
+      dealerIndex: 0,
+      holeByPlayer: {
+        [HERO_PLAYER_ID]: [parseCard('Ah'), parseCard('Jh')],
+        dien: [parseCard('As'), parseCard('Kd')],
+        ca: [parseCard('Kc'), parseCard('Qs')], // Top-second pair -> Cá calls reliably
+        da: [parseCard('2c'), parseCard('7d')],
+      },
+      board: [
+        parseCard('Kh'),
+        parseCard('9h'),
+        parseCard('3c'),
+        parseCard('2s'),
+        parseCard('6d'),
+      ],
+    });
+
+    let sCall = createSandboxSession({
+      seed: callSeed,
+      settings: {
+        playerCount: 4,
+        enabledRivalIds: ['dien', 'ca', 'da'],
+        allowOutOfTurn: true,
+      },
+      fixtures: { deck: callDeck, openerId: 'dien' },
+    });
+    assertInvariants(sCall, 'oot-call init');
+
+    // Step 1: Điên opens with a bet on flop (since allowOutOfTurn is on, advance until currentBet > 0 and active is 'ca')
+    let guardCall = 0;
+    while (
+      sCall.hand!.activePlayerId !== 'ca' &&
+      sCall.hand!.phase === 'betting' &&
+      guardCall < 6
+    ) {
+      sCall = stepOneBotTurn(sCall);
+      assertInvariants(sCall, `oot-call opener step ${guardCall}`);
+      guardCall++;
+    }
+    expect(sCall.hand!.activePlayerId).toBe('ca');
+    expect(sCall.hand!.currentBet).toBeGreaterThan(0);
+
+    const betToCallA = sCall.hand!.currentBet;
+    const preDeclareHeroStackA = chipValue(
+      sCall.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack,
+    );
+    const preDeclarePotA = chipValue(sCall.hand!.pot);
+    const preDeclareTimelineLenA = sCall.hand!.timeline.length;
+
+    // Hero declares OOT Call while it is Cá's turn
+    sCall = stageAmountForHero(sCall, betToCallA);
+    sCall = performHeroOutOfTurn(sCall, 'call');
+    assertInvariants(sCall, 'oot-call after hero declare');
+
+    // Chips are reserved out of Hero stack, but pending snapshot MUST preserve PRE-RESERVE stack & pot & legalActions!
+    const heroSeatReservedA = sCall.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!;
+    expect(chipValue(heroSeatReservedA.stack)).toBe(preDeclareHeroStackA - betToCallA);
+    expect(sCall.pendingHeroOutOfTurnDecision).not.toBeNull();
+    expect(sCall.pendingHeroOutOfTurnDecision!.snapshot.heroStack).toBe(preDeclareHeroStackA);
+    expect(sCall.pendingHeroOutOfTurnDecision!.snapshot.potBeforeCall).toBe(preDeclarePotA);
+    expect(sCall.pendingHeroOutOfTurnDecision!.snapshot.legalActions?.callAmount).toBe(betToCallA);
+
+    // Step Cá: Cá calls, triggering Hero's OOT Call auto-execution!
+    const prevTimelineLenA = sCall.hand!.timeline.length;
+    let botStepA = 0;
+    while (sCall.pendingHeroOutOfTurnDecision !== null && botStepA < 4) {
+      sCall = stepOneBotTurn(sCall);
+      assertInvariants(sCall, `oot-call after ca step ${botStepA}`);
+      botStepA++;
+    }
+
+    const newEventsA = sCall.hand!.timeline.slice(prevTimelineLenA);
+    expect(
+      newEventsA.some(
+        (ev) => ev.type === 'player-action' && ev.playerId === 'ca' && ev.action.type === 'call',
+      ),
+    ).toBe(true);
+    expect(
+      newEventsA.some(
+        (ev) =>
+          ev.type === 'player-action' &&
+          ev.playerId === HERO_PLAYER_ID &&
+          ev.action.type === 'call' &&
+          ev.fromOutOfTurn === true,
+      ),
+    ).toBe(true);
+
+    // Pending record moved into heroDecisionsCurrentHand with exact pre-reserve declare-time snapshot (no hindsight from Cá's call!)
+    expect(sCall.pendingHeroOutOfTurnDecision).toBeNull();
+    expect(sCall.heroDecisionsCurrentHand.length).toBe(1);
+    const ootRecordA = sCall.heroDecisionsCurrentHand[0]!;
+    expect(ootRecordA.fromOutOfTurn).toBe(true);
+    expect(ootRecordA.chosenAction.type).toBe('call');
+    expect(ootRecordA.snapshot.heroStack).toBe(preDeclareHeroStackA);
+    expect(ootRecordA.snapshot.potBeforeCall).toBe(preDeclarePotA);
+    expect(ootRecordA.snapshot.legalActions?.canCall).toBe(true);
+    expect(ootRecordA.snapshot.legalActions?.callAmount).toBe(betToCallA);
+    expect(ootRecordA.timelineLengthAtDecision).toBe(preDeclareTimelineLenA);
+    expect(canPracticeDecisionRecord(ootRecordA)).toBe(false);
+
+    // Complete hand & verify end-of-hand review labels clearly mark out-of-turn
+    sCall = finishHandHeroCheckFold(sCall);
+    expect(sCall.hand!.phase).toBe('complete');
+    expect(sCall.lastHandReview).not.toBeNull();
+    const ootReviewA = sCall.lastHandReview!.decisions[0]!;
+    expect(ootReviewA.record.fromOutOfTurn).toBe(true);
+    expect(ootReviewA.record.snapshot.heroStack).toBe(preDeclareHeroStackA);
+    expect(ootReviewA.turnLabelVi).toBe('Hô trước lượt');
+    expect(ootReviewA.chosenActionLabel).toContain(`Call ${betToCallA}`);
+    expect(ootReviewA.chosenActionLabel).toContain('Hô trước lượt');
+    expect(ootReviewA.assumptionsVi.some((line) => line.includes(`Stack Hero (trước reserve): ${preDeclareHeroStackA}`))).toBe(true);
+
+    // --- Part B: Auto-execute Hero OOT Call right after intermediate bot FOLDS ---
+    let foldSeed = '';
+    let foldSeatOrder: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const candidateSeed = `p4-oot-after-fold-${i}`;
+      const probe = createSandboxSession({
+        seed: candidateSeed,
+        settings: {
+          playerCount: 4,
+          enabledRivalIds: ['dien', 'da', 'tho'],
+          allowOutOfTurn: true,
+        },
+      });
+      const order = probe.hand!.seats.map((seat) => seat.playerId);
+      // Seat 2 = opener 'dien', seat 3 = tight 'da' right before Hero (seat 0)
+      if (order[2] === 'dien' && order[3] === 'da') {
+        foldSeed = candidateSeed;
+        foldSeatOrder = order;
+        break;
+      }
+    }
+    expect(foldSeed).not.toBe('');
+
+    const foldDeck = buildFixtureDeck({
+      seatOrderIds: foldSeatOrder,
+      dealerIndex: 0,
+      holeByPlayer: {
+        [HERO_PLAYER_ID]: [parseCard('As'), parseCard('Qs')],
+        dien: [parseCard('Ac'), parseCard('Kc')],
+        da: [parseCard('2c'), parseCard('7d')], // Trash hand -> Đá folds facing Điên's bet
+        tho: [parseCard('3h'), parseCard('8c')],
+      },
+      board: [
+        parseCard('Ad'),
+        parseCard('Kh'),
+        parseCard('9s'),
+        parseCard('4c'),
+        parseCard('5d'),
+      ],
+    });
+
+    let sFold = createSandboxSession({
+      seed: foldSeed,
+      settings: {
+        playerCount: 4,
+        enabledRivalIds: ['dien', 'da', 'tho'],
+        allowOutOfTurn: true,
+      },
+      fixtures: { deck: foldDeck, openerId: 'dien' },
+    });
+    assertInvariants(sFold, 'oot-fold init');
+
+    let guardFold = 0;
+    while (
+      sFold.hand!.activePlayerId !== 'da' &&
+      sFold.hand!.phase === 'betting' &&
+      guardFold < 6
+    ) {
+      sFold = stepOneBotTurn(sFold);
+      assertInvariants(sFold, `oot-fold opener step ${guardFold}`);
+      guardFold++;
+    }
+    expect(sFold.hand!.activePlayerId).toBe('da');
+    expect(sFold.hand!.currentBet).toBeGreaterThan(0);
+
+    const betToCallB = sFold.hand!.currentBet;
+    const preDeclareHeroStackB = chipValue(
+      sFold.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack,
+    );
+    const preDeclarePotB = chipValue(sFold.hand!.pot);
+    const preDeclareOpponentsB = sFold.hand!.seats
+      .filter((seat) => seat.playerId !== HERO_PLAYER_ID && seat.status !== 'folded')
+      .map((seat) => seat.playerId);
+
+    sFold = stageAmountForHero(sFold, betToCallB);
+    sFold = performHeroOutOfTurn(sFold, 'call');
+    assertInvariants(sFold, 'oot-fold after hero declare');
+
+    const prevTimelineLenB = sFold.hand!.timeline.length;
+    let botStepB = 0;
+    while (sFold.pendingHeroOutOfTurnDecision !== null && botStepB < 4) {
+      sFold = stepOneBotTurn(sFold);
+      assertInvariants(sFold, `oot-fold after da step ${botStepB}`);
+      botStepB++;
+    }
+
+    const newEventsB = sFold.hand!.timeline.slice(prevTimelineLenB);
+    expect(
+      newEventsB.some(
+        (ev) => ev.type === 'player-action' && ev.playerId === 'da' && ev.action.type === 'fold',
+      ),
+    ).toBe(true);
+    expect(
+      newEventsB.some(
+        (ev) =>
+          ev.type === 'player-action' &&
+          ev.playerId === HERO_PLAYER_ID &&
+          ev.action.type === 'call' &&
+          ev.fromOutOfTurn === true,
+      ),
+    ).toBe(true);
+
+    expect(sFold.pendingHeroOutOfTurnDecision).toBeNull();
+    expect(sFold.heroDecisionsCurrentHand.length).toBe(1);
+    const ootRecordB = sFold.heroDecisionsCurrentHand[0]!;
+    expect(ootRecordB.fromOutOfTurn).toBe(true);
+    expect(ootRecordB.snapshot.heroStack).toBe(preDeclareHeroStackB);
+    expect(ootRecordB.snapshot.potBeforeCall).toBe(preDeclarePotB);
+    expect(ootRecordB.activeOpponentIds).toEqual(preDeclareOpponentsB);
+    expect(canPracticeDecisionRecord(ootRecordB)).toBe(false);
+
+    sFold = finishHandHeroCheckFold(sFold);
+    expect(sFold.hand!.phase).toBe('complete');
+    expect(sFold.lastHandReview!.decisions[0]!.turnLabelVi).toBe('Hô trước lượt');
+  });
+
+  it('OOT cancellation: releases pending decision record on bet-change cancel, keeps timeline cancel event, and does not misattribute to subsequent Hero action', () => {
+    // Pick a seed where 'dien' is immediately before Hero (seat 3) and opens flop with a bet
+    let cancelSeed = '';
+    let cancelSeatOrder: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const candidateSeed = `p4-oot-cancel-clean-${i}`;
+      const probe = createSandboxSession({
+        seed: candidateSeed,
+        settings: {
+          playerCount: 4,
+          enabledRivalIds: ['dien', 'da', 'ca'],
+          allowOutOfTurn: true,
+        },
+      });
+      const order = probe.hand!.seats.map((seat) => seat.playerId);
+      if (order[3] === 'dien') {
+        cancelSeed = candidateSeed;
+        cancelSeatOrder = order;
+        break;
+      }
+    }
+    expect(cancelSeed).not.toBe('');
+
+    const cancelDeck = buildFixtureDeck({
+      seatOrderIds: cancelSeatOrder,
+      dealerIndex: 0,
+      holeByPlayer: {
+        [HERO_PLAYER_ID]: [parseCard('Jc'), parseCard('Tc')],
+        dien: [parseCard('As'), parseCard('Ah')], // Strong hand -> Điên bets reliably
+        da: [parseCard('2c'), parseCard('7d')],
+        ca: [parseCard('3d'), parseCard('8c')],
+      },
+      board: [
+        parseCard('Ad'),
+        parseCard('9h'),
+        parseCard('4s'),
+        parseCard('2d'),
+        parseCard('6c'),
+      ],
+    });
+
+    let s = createSandboxSession({
+      seed: cancelSeed,
+      settings: {
+        playerCount: 4,
+        enabledRivalIds: ['dien', 'da', 'ca'],
+        allowOutOfTurn: true,
+      },
+      fixtures: { deck: cancelDeck, openerId: 'dien' },
+    });
+    assertInvariants(s, 'oot-cancel init');
+    expect(s.hand!.activePlayerId).toBe('dien');
+
+    const heroStackPreDeclare = chipValue(
+      s.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack,
+    );
+
+    // Hero declares OOT Bet 20 before Điên acts
+    s = stageChip(stageChip(s, 10), 10);
+    s = performHeroOutOfTurn(s, 'bet');
+    assertInvariants(s, 'oot-cancel after hero declare bet 20');
+    expect(s.pendingHeroOutOfTurnDecision).not.toBeNull();
+    expect(s.pendingHeroOutOfTurnDecision!.snapshot.heroStack).toBe(heroStackPreDeclare);
+
+    // Step Điên -> Điên bets, cancelling Hero's OOT Bet 20 and returning chips
+    let stepIdx = 0;
+    while (
+      s.hand!.phase === 'betting' &&
+      s.hand!.activePlayerId !== HERO_PLAYER_ID &&
+      stepIdx < 6
+    ) {
+      s = stepOneBotTurn(s);
+      assertInvariants(s, `oot-cancel bot step ${stepIdx}`);
+      stepIdx++;
+    }
+
+    expect(s.hand!.activePlayerId).toBe(HERO_PLAYER_ID);
+    expect(s.hand!.currentBet).toBeGreaterThan(0);
+    // Pending record MUST be released and NOT pushed to heroDecisionsCurrentHand
+    expect(s.pendingHeroOutOfTurnDecision).toBeNull();
+    expect(s.heroDecisionsCurrentHand.length).toBe(0);
+    expect(
+      chipValue(s.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack),
+    ).toBe(heroStackPreDeclare);
+    expect(
+      s.hand!.timeline.some(
+        (ev) => ev.type === 'out-of-turn-cancelled' && ev.playerId === HERO_PLAYER_ID,
+      ),
+    ).toBe(true);
+
+    // Hero now freely chooses Fold on their actual turn
+    const betFacingHero = s.hand!.currentBet;
+    s = performHeroAction(s, 'fold');
+    assertInvariants(s, 'oot-cancel after hero fold');
+
+    s = advanceUntilHeroOrEnd(s);
+    assertInvariants(s, 'oot-cancel after hand complete');
+    expect(s.hand!.phase).toBe('complete');
+    expect(s.lastHandReview).not.toBeNull();
+
+    // Review must contain ONLY Hero's actual in-turn Fold (NOT the cancelled OOT Bet 20!)
+    expect(s.lastHandReview!.decisions.length).toBe(1);
+    const onlyDecision = s.lastHandReview!.decisions[0]!;
+    expect(onlyDecision.record.fromOutOfTurn).toBe(false);
+    expect(onlyDecision.record.chosenAction.type).toBe('fold');
+    expect(onlyDecision.record.snapshot.currentBet).toBe(betFacingHero);
+    expect(onlyDecision.record.snapshot.heroStack).toBe(heroStackPreDeclare);
+    expect(onlyDecision.turnLabelVi).toBe('Đúng lượt');
+    expect(onlyDecision.chosenActionLabel).toBe('Fold');
+    expect(canPracticeDecisionRecord(onlyDecision.record)).toBe(true);
+
+    // Timeline still preserves both out-of-turn-declared and out-of-turn-cancelled events
+    expect(
+      s.lastHandReview!.timeline.some(
+        (ev) => ev.type === 'out-of-turn-cancelled' && ev.playerId === HERO_PLAYER_ID,
+      ),
+    ).toBe(true);
+  });
+
+  it('Topbar mute syncs pendingSettings & storage for next hand; spectator Hero cannot enter pendingHeroLeave', () => {
+    const storeData = new Map<string, string>();
+    const memStorage = {
+      getItem: (k: string) => storeData.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        storeData.set(k, v);
+      },
+    };
+
+    let s = createSandboxSession({
+      seed: 'p4-mute-and-spectator',
+      settings: { playerCount: 4, allowOutOfTurn: false, enablePreflopBetting: false },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    assertInvariants(s, 'mute-spectator init');
+
+    // Queue pending table rule change mid-hand
+    s = applySettingsUpdate(
+      s,
+      {
+        ...s.appliedSettings,
+        enablePreflopBetting: true,
+        preflopCap: 25,
+      },
+      'apply-boundary',
+    );
+    expect(s.pendingSettings?.enablePreflopBetting).toBe(true);
+    expect(s.pendingSettings?.audio.muted).toBe(false);
+
+    // Toggle mute from topbar -> updates BOTH appliedSettings and pendingSettings, and persists pending rules + muted
+    s = toggleAudioMute(s);
+    expect(s.appliedSettings.audio.muted).toBe(true);
+    expect(s.pendingSettings?.audio.muted).toBe(true);
+    const toPersist = getPersistedSettingsForSession(s);
+    expect(toPersist.audio.muted).toBe(true);
+    expect(toPersist.enablePreflopBetting).toBe(true);
+    expect(toPersist.preflopCap).toBe(25);
+    saveSandboxSettings(toPersist, memStorage);
+    const reloaded = loadSandboxSettings(memStorage);
+    expect(reloaded.settings.audio.muted).toBe(true);
+    expect(reloaded.settings.enablePreflopBetting).toBe(true);
+    expect(reloaded.settings.preflopCap).toBe(25);
+
+    // Hero requests leave mid-hand -> completes hand 1 and leaves table at boundary
+    s = requestHeroLeave(s);
+    assertInvariants(s, 'after hero leave request');
+    s = advanceUntilHeroOrEnd(s);
+    assertInvariants(s, 'hand 1 done with hero leave');
+    expect(s.phase).toBe('between-hands');
+    expect(s.boundary!.seats.some((seat) => seat.playerId === HERO_PLAYER_ID)).toBe(false);
+
+    // Calling requestHeroLeave while already unseated at boundary is a safe no-op
+    const leaveAtBoundaryNoop = requestHeroLeave(s);
+    expect(leaveAtBoundaryNoop.pendingHeroLeave).toBe(false);
+    expect(leaveAtBoundaryNoop.statusNotice?.tone).not.toBe('error');
+
+    // Start Hand #2 WITHOUT re-seating Hero (Hero is spectating; T4 auto-invites a 4th rival)
+    // Also verify pending preflop rules applied AND muted remained true!
+    const hand2 = startNextHand(s);
+    assertInvariants(hand2, 'hand 2 spectator start');
+    expect(hand2.phase).toBe('in-hand');
+    expect(hand2.appliedSettings.enablePreflopBetting).toBe(true);
+    expect(hand2.appliedSettings.preflopCap).toBe(25);
+    expect(hand2.appliedSettings.audio.muted).toBe(true);
+    expect(hand2.hand!.seats.some((seat) => seat.playerId === HERO_PLAYER_ID)).toBe(false);
+
+    // Guard in controller: spectator calling requestHeroLeave MUST NOT set pendingHeroLeave
+    const afterSpectatorLeave = requestHeroLeave(hand2);
+    expect(afterSpectatorLeave.pendingHeroLeave).toBe(false);
+    assertInvariants(afterSpectatorLeave, 'after spectator requestHeroLeave');
   });
 });

@@ -24,6 +24,7 @@ export interface HeroControlsProps {
   readonly potValue: number;
   readonly streetCap: number;
   readonly terminology: TerminologyLanguage;
+  readonly isHeroSeated?: boolean;
   readonly pendingHeroLeave: boolean;
   readonly isAwaitingPayout: boolean;
   readonly isHandComplete: boolean;
@@ -52,6 +53,7 @@ export function HeroControls({
   potValue,
   streetCap,
   terminology,
+  isHeroSeated,
   pendingHeroLeave,
   isAwaitingPayout,
   isHandComplete,
@@ -72,8 +74,10 @@ export function HeroControls({
   onNextHand,
 }: HeroControlsProps) {
   const [confirmingFreeFold, setConfirmingFreeFold] = useState(false);
+  const heroSeated = isHeroSeated ?? heroCards !== null;
 
   const canPickChips =
+    heroSeated &&
     !isHandComplete &&
     !isAwaitingPayout &&
     (validation.isHeroTurn || validation.canDeclareOutOfTurn);
@@ -159,9 +163,10 @@ export function HeroControls({
             type="button"
             className="sb-btn sb-btn--ghost"
             onClick={onRequestLeave}
-            disabled={pendingHeroLeave}
+            disabled={!heroSeated || pendingHeroLeave}
+            title={!heroSeated ? 'Chỉ dùng được khi bạn đang ngồi bàn' : undefined}
           >
-            {pendingHeroLeave ? 'Sẽ rời cuối ván' : 'Rời bàn'}
+            {pendingHeroLeave && heroSeated ? 'Sẽ rời cuối ván' : 'Rời bàn'}
           </button>
         </div>
       </div>
@@ -435,9 +440,11 @@ export function HeroControls({
               </>
             ) : (
               <span className="sb-muted">
-                {pendingHeroLeave
-                  ? 'Đang chờ các đối thủ kết thúc ván để rời bàn…'
-                  : 'Đang chờ lượt đối thủ…'}
+                {!heroSeated
+                  ? 'Bạn đang xem bàn (chưa ngồi ghế) — có thể ngồi lại ở ranh giới ván…'
+                  : pendingHeroLeave
+                    ? 'Đang chờ các đối thủ kết thúc ván để rời bàn…'
+                    : 'Đang chờ lượt đối thủ…'}
               </span>
             )}
           </div>

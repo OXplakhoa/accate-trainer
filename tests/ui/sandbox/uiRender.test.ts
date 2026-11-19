@@ -179,15 +179,86 @@ describe('P4 Sandbox UI Rendering — B3, B5, C2, P5 Tournament Slots & Review',
     expect(htmlEnabled).not.toMatch(/disabled=""[^>]*data-action-btn="bet"/);
   });
 
-  it('HandReviewModal renders decision quality, pot odds, EV, assumptions, and outcome separation banner', () => {
-    let s = createSandboxSession({
+  it('HeroControls disables "Rời bàn" button when Hero is spectating (not seated) and enables when seated', () => {
+    const base = createSandboxSession({
+      seed: 'ui-leave-spectator-check',
+      settings: { playerCount: 4, allowOutOfTurn: false },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    const heroSeat = base.hand!.seats.find((s) => s.playerId === HERO_PLAYER_ID)!;
+
+    const seatedHtml = renderToStaticMarkup(
+      createElement(HeroControls, {
+        heroCards: heroSeat.holeCards,
+        availableStack: heroSeat.stack,
+        stagedChips: base.stagedChips,
+        validation: getHeroActionValidation(base),
+        potValue: 20,
+        streetCap: 50,
+        terminology: 'en-standard',
+        isHeroSeated: true,
+        pendingHeroLeave: false,
+        isAwaitingPayout: false,
+        isHandComplete: false,
+        canPracticeSpot: false,
+        onStageChip: () => undefined,
+        onUnstageChip: () => undefined,
+        onUndoLastChip: () => undefined,
+        onClearStaged: () => undefined,
+        onAction: () => undefined,
+        onDeclareOutOfTurn: () => undefined,
+        onOpenExchange: () => undefined,
+        onRequestLeave: () => undefined,
+      }),
+    );
+    expect(seatedHtml).toMatch(/<button type="button" class="sb-btn sb-btn--ghost">Rời bàn<\/button>/);
+
+    const spectatorHtml = renderToStaticMarkup(
+      createElement(HeroControls, {
+        heroCards: null,
+        availableStack: { 5: 0, 10: 0, 50: 0, 100: 0 },
+        stagedChips: { 5: 0, 10: 0, 50: 0, 100: 0 },
+        validation: {
+          ...getHeroActionValidation(base),
+          isHeroTurn: false,
+          canDeclareOutOfTurn: false,
+        },
+        potValue: 20,
+        streetCap: 50,
+        terminology: 'en-standard',
+        isHeroSeated: false,
+        pendingHeroLeave: false,
+        isAwaitingPayout: false,
+        isHandComplete: false,
+        canPracticeSpot: false,
+        onStageChip: () => undefined,
+        onUnstageChip: () => undefined,
+        onUndoLastChip: () => undefined,
+        onClearStaged: () => undefined,
+        onAction: () => undefined,
+        onDeclareOutOfTurn: () => undefined,
+        onOpenExchange: () => undefined,
+        onRequestLeave: () => undefined,
+      }),
+    );
+    expect(spectatorHtml).toMatch(/disabled=""[^>]*>Rời bàn<\/button>/);
+    expect(spectatorHtml).toContain('Bạn đang xem bàn');
+  });
+
+  it('HandReviewModal renders decision quality, pot odds, EV, assumptions, turn labels, and gates Drill button to Hero-turn states only', () => {
+    const sBeforeFold = createSandboxSession({
       seed: 'ui-review-modal-seed',
       settings: { playerCount: 4, allowOutOfTurn: false },
       fixtures: { openerId: HERO_PLAYER_ID },
     });
-    s = performHeroAction(s, 'fold');
+    const heroTurnHand = sBeforeFold.hand!;
+    const sAfterFold = performHeroAction(sBeforeFold, 'fold');
+    const botTurnHand = sAfterFold.hand!;
 
-    // Use a completed hand review
+    expect(heroTurnHand.activePlayerId).toBe(HERO_PLAYER_ID);
+    expect(botTurnHand.activePlayerId).not.toBe(HERO_PLAYER_ID);
+
+    // Review with one normal Hero-turn decision (eligible for Drill) and one out-of-turn bot-turn decision (NOT eligible)
     const reviewHtml = renderToStaticMarkup(
       createElement(HandReviewModal, {
         review: {
@@ -224,7 +295,7 @@ describe('P4 Sandbox UI Rendering — B3, B5, C2, P5 Tournament Slots & Review',
                   potSlices: [],
                   legalActions: null,
                 },
-                handStateAtDecision: s.hand!,
+                handStateAtDecision: heroTurnHand,
                 chosenAction: { type: 'call', chips: { 5: 0, 10: 3, 50: 0, 100: 0 } },
                 fromOutOfTurn: false,
                 potOdds: {
@@ -245,6 +316,7 @@ describe('P4 Sandbox UI Rendering — B3, B5, C2, P5 Tournament Slots & Review',
               equitySamples: 450,
               equitySeed: 'test-seed',
               chosenActionLabel: 'Call 30',
+              turnLabelVi: 'Đúng lượt',
               chosenEv: 24,
               chosenEvPrecision: 'exact',
               bestAlternativeLabel: 'Call 30',
@@ -256,13 +328,76 @@ describe('P4 Sandbox UI Rendering — B3, B5, C2, P5 Tournament Slots & Review',
               assumptionsVi: ['Street: Flop · Cap street: 50 điểm.'],
               rangeSummariesVi: ['Điên có range rộng gồm draw và bluff.'],
             },
+            {
+              record: {
+                decisionIndex: 1,
+                street: 'turn',
+                snapshot: {
+                  heroId: HERO_PLAYER_ID,
+                  heroCards: [parseCard('Js'), parseCard('Jd')],
+                  board: [
+                    parseCard('9h'),
+                    parseCard('7h'),
+                    parseCard('2c'),
+                    parseCard('4s'),
+                  ],
+                  street: 'turn',
+                  potBeforeCall: 130,
+                  heroStack: 465,
+                  heroStreetContribution: 0,
+                  heroTotalContribution: 35,
+                  currentBet: 20,
+                  streetCap: 50,
+                  remainingCapAllowance: 50,
+                  toCall: 20,
+                  callAmount: 20,
+                  isCallAllIn: false,
+                  activeOpponentCount: 2,
+                  actingOpponentCount: 2,
+                  position: { label: 'Nói sau 2 người' },
+                  potSlices: [],
+                  legalActions: null,
+                },
+                handStateAtDecision: botTurnHand,
+                chosenAction: { type: 'call', chips: { 5: 0, 10: 2, 50: 0, 100: 0 } },
+                fromOutOfTurn: true,
+                potOdds: {
+                  hasCall: true,
+                  potBeforeCall: 130,
+                  callAmount: 20,
+                  potAfterCall: 150,
+                  requiredEquity: 20 / 150,
+                  requiredEquityPercent: (20 / 150) * 100,
+                  potToCallRatio: 130 / 20,
+                  oddsAgainst: 130 / 20,
+                  potToCallLabel: '6.50-to-1',
+                },
+                activeOpponentIds: ['dien', 'ca'],
+                timelineLengthAtDecision: 6,
+              },
+              estimatedEquity: 0.62,
+              equitySamples: 450,
+              equitySeed: 'test-seed-oot',
+              chosenActionLabel: 'Call 20 (Hô trước lượt)',
+              turnLabelVi: 'Hô trước lượt',
+              chosenEv: 73,
+              chosenEvPrecision: 'exact',
+              bestAlternativeLabel: 'Call 20',
+              bestAlternativeEv: 73,
+              evDiff: 0,
+              qualityLabel: 'Tốt',
+              qualityTone: 'good',
+              explanationVi: 'Bạn đã hô trước Call 20.',
+              assumptionsVi: ['Thời điểm quyết định: Hô trước lượt.'],
+              rangeSummariesVi: ['Điên có range rộng gồm draw và bluff.'],
+            },
           ],
-          timeline: s.hand!.timeline,
+          timeline: botTurnHand.timeline,
           showdownResolution: null,
           foldWinnerId: null,
           foldWinPotAmount: 0,
         },
-        seatProfiles: s.seatProfiles,
+        seatProfiles: sAfterFold.seatProfiles,
         terminology: 'en-standard',
         onPracticeSpot: () => undefined,
         onClose: () => undefined,
@@ -274,7 +409,12 @@ describe('P4 Sandbox UI Rendering — B3, B5, C2, P5 Tournament Slots & Review',
     expect(reviewHtml).toContain('54,0%');
     expect(reviewHtml).toContain('+24,0 điểm');
     expect(reviewHtml).toContain('Tốt');
-    expect(reviewHtml).toContain('Luyện spot này trong Drill');
+    expect(reviewHtml).toContain('Đúng lượt');
+    expect(reviewHtml).toContain('Hô trước lượt');
+    expect(reviewHtml).toContain('Call 20 (Hô trước lượt)');
+    // Drill jump button must appear ONCE (only for the valid Hero-turn decision, NOT for the out-of-turn bot-turn decision)
+    const drillButtons = reviewHtml.match(/Luyện spot này trong Drill/g) ?? [];
+    expect(drillButtons.length).toBe(1);
   });
 
   it('Mobile-first priority & 10-seat progressive detail: board and hero controls precede seats panel while preserving all styles & chip details', () => {

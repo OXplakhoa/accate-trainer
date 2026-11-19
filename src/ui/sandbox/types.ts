@@ -9,6 +9,7 @@ import type {
   LedgerEvent,
   LegalActions,
   NongTiltState,
+  OutOfTurnDeclaration,
   PotOddsResult,
   RivalId,
   ShowdownResolution,
@@ -52,6 +53,15 @@ export interface SeatProfileInfo {
   readonly rivalId: RivalId | null;
 }
 
+export interface PendingHeroOutOfTurnDecision {
+  readonly declaration: OutOfTurnDeclaration;
+  readonly snapshot: DecisionSnapshot;
+  readonly handStateAtDecision: HandState;
+  readonly potOdds: PotOddsResult;
+  readonly activeOpponentIds: readonly string[];
+  readonly timelineLengthAtDecision: number;
+}
+
 export interface HeroDecisionRecord {
   readonly decisionIndex: number;
   readonly street: Street;
@@ -72,6 +82,7 @@ export interface HeroDecisionReview {
   readonly equitySamples: number;
   readonly equitySeed: string;
   readonly chosenActionLabel: string;
+  readonly turnLabelVi: string;
   readonly chosenEv: number;
   readonly chosenEvPrecision: 'exact' | 'estimated';
   readonly bestAlternativeLabel: string;
@@ -119,6 +130,7 @@ export interface SandboxSessionState {
   readonly stagedChips: ChipCounts;
   readonly stagedHistory: readonly Denomination[];
   readonly pendingHeroLeave: boolean;
+  readonly pendingHeroOutOfTurnDecision: PendingHeroOutOfTurnDecision | null;
   readonly heroDecisionsCurrentHand: readonly HeroDecisionRecord[];
   readonly lastHandReview: HandReviewSummary | null;
   readonly stepCounter: number;

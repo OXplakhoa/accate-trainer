@@ -124,6 +124,10 @@ describe('P4 Settings, Chip Distribution & Audio Deduplication', () => {
     expect(audio.hasPlayed('1:0')).toBe(true);
     // Replaying same event key must be deduplicated
     expect(audio.playTimelineEventOnce('1:0', event)).toBe(false);
+    // Resetting dedup on new session allows Hand #1 events ('1:0') to play again
+    audio.clearPlayedHistory();
+    expect(audio.hasPlayed('1:0')).toBe(false);
+    expect(audio.playTimelineEventOnce('1:0', event)).toBe(true);
     audio.dispose();
   });
 });
