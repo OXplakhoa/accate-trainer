@@ -1,0 +1,1629 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  addChips,
+  chipValue,
+  DENOMINATIONS,
+  emptyChips,
+  exchangeHandChips,
+  getLegalActions,
+  selectionMatches,
+  subtractChips,
+  type BettingAction,
+  type ChipCounts,
+  type Denomination,
+  type HandState,
+} from '../../engine';
+import {
+  buildDrillProgressReport,
+  buildFixtureDrillSpot,
+  createDrillSession,
+  createDrillSpotFromHandState,
+  createInitialDrillPersistedState,
+  DRILL_CONCEPT_IDS,
+  DRILL_CONCEPT_TITLES_VI,
+  DRILL_LEVEL_TITLES_VI,
+  DRILL_LEVELS,
+  finalizeDrillSessionHand,
+  findAvailableChipExchanges,
+  generateDrillSpot,
+  getVisibleFeedback,
+  LEVEL1_STEP_ORDER,
+  loadDrillStateFromStorage,
+  markLessonCompleted,
+  recordCompletedAttempt,
+  requestDrillHint,
+  resolveLevel3TimeoutAction,
+  saveDrillStateToStorage,
+  selectPhysicalChipsForAmount,
+  submitLevel1Step,
+  submitLevel2Decision,
+  submitLevel3Decision,
+  updateDrillPreferences,
+  type ActiveDrillLevel,
+  type BoardTextureClass,
+  type ChipExchangeHelperOption,
+  type DrillConceptId,
+  type DrillFixtureId,
+  type DrillLevel,
+  type DrillPersistedState,
+  type DrillSessionState,
+  type DrillSpot,
+  type Level1StepId,
+} from '../../engine/drill';
+import { LessonView } from './LessonView';
+import { ProgressView } from './ProgressView';
+import { DrillSoundController } from './sound';
+import { DRILL_SCOPED_CSS } from './styles';
+import { ChipToken, TableSnapshotView } from './VisualComponents';
+
+export interface DrillAppProps {
+  readonly initialSpot?: {
+    readonly hand: HandState;
+    readonly heroId: string;
+  };
+  readonly defaultLevel?: DrillLevel;
+  readonly defaultConcept?: DrillConceptId;
+  readonly defaultClockSeconds?: 10 | 15 | 20 | 25;
+  readonly onBackToSandbox?: () => void;
+}
+
+const STEP_LABELS_VI: Readonly<Record<Level1StepId, string>> = Object.freeze({
+  outs: '1. Đếm Outs',
+  'unseen-cards': '2. Số lá chưa biết',
+  'turn-percent': '3. % Turn (1 lá)',
+  'river-percent': '4. % tới River',
+  'pot-odds': '5. Pot Odds (%)',
+  action: '6. Hành động & Chip',
+});
+
+const MILESTONE_OPTIONS: readonly {
+  readonly value: 'generated' | DrillFixtureId;
+  readonly labelVi: string;
+}[] = Object.freeze([
+  { value: 'generated', labelVi: '🎲 Sinh spot mới từ Engine (M1 + Rival M2)' },
+  { value: 'h1-step7', labelVi: '📌 H1 #7 — Flop J♠J♦ lên set trước Điên raise 30 (D1, D6)' },
+  { value: 'h1-step13', labelVi: '📌 H1 #13 — Turn 5♠ trước Điên bet cap 50 (22,7%)' },
+  { value: 'h1-step16', labelVi: '📌 H1 #16 — River K♣ trước Điên bet cap 50 (15,6%)' },
+  { value: 'd8-chase-draw', labelVi: '📌 Mốc D8 — Turn Pot 300, Bet 50 đuổi Flush Draw (12,5% vs 19,57%)' },
+  { value: 'dirty-outs-flop-oesd', labelVi: '📌 Mốc M1 — Đếm 8 Clean Outs & Trừ Outs bẩn Q♥ (L2 s24–27)' },
+  { value: 'clean-outs-turn-flush-draw', labelVi: '📌 Turn Nut Flush Draw 9/46 ≈ 19,57% (L2 s10–11)' },
+  { value: 'side-pot-multiway', labelVi: '📌 Side Pot (P1) — Chia Equity Main Pot 110 & Side Pot 40' },
+  { value: 'nong-tilt-spot', labelVi: '📌 Nóng đang Tilt (D45) — Range rộng ở mức Cap 50 (L8 s6)' },
+  { value: 'board-texture-wet-checkraise', labelVi: '📌 Bẫy Check-Raise trên Mặt bài Nhiều Draw T♥9♥8♣' },
+]);
+
+function getBrowserLocalStorage(): Storage | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  return window.localStorage;
+}
+
+function safeNowMs(): number {
+  try {
+    return typeof performance !== 'undefined' ? performance.now() : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function DrillApp(props: DrillAppProps) {
+  const soundRef = useRef<DrillSoundController | null>(null);
+  if (soundRef.current === null) {
+    soundRef.current = new DrillSoundController();
+  }
+
+  // Load persisted state from browser storage with corruption & blocked-storage recovery
+  const initialLoad = useMemo(() => loadDrillStateFromStorage(getBrowserLocalStorage), []);
+  const [persistedState, setPersistedState] = useState<DrillPersistedState>(() => {
+    let st = initialLoad.state;
+    if (props.defaultLevel !== undefined) {
+      st = updateDrillPreferences(st, { lastSelectedLevel: props.defaultLevel });
+    }
+    if (props.defaultConcept !== undefined) {
+      st = updateDrillPreferences(st, { lastSelectedConcept: props.defaultConcept });
+    }
+    if (props.defaultClockSeconds !== undefined) {
+      st = updateDrillPreferences(st, { clockSeconds: props.defaultClockSeconds });
+    }
+    return st;
+  });
+
+  const [storageAvailable, setStorageAvailable] = useState<boolean>(initialLoad.storageAvailable);
+  const [storageWarningVi, setStorageWarningVi] = useState<string | null>(() => {
+    if (!initialLoad.storageAvailable) {
+      return 'Trình duyệt đang chặn localStorage; dữ liệu tiến bộ vẫn hoạt động trong phiên hiện tại.';
+    }
+    if (initialLoad.recoveredFromError) {
+      return `Đã khôi phục dữ liệu tiến bộ an toàn (mã: ${initialLoad.errorReason ?? 'recovered'}).`;
+    }
+    return null;
+  });
+
+  const persistState = useCallback((next: DrillPersistedState) => {
+    setPersistedState(next);
+    const res = saveDrillStateToStorage(getBrowserLocalStorage, next);
+    if (!res.ok) {
+      setStorageAvailable(false);
+      setStorageWarningVi(
+        'Trình duyệt đang chặn ghi localStorage; tiến bộ vẫn hoạt động trong phiên hiện tại.',
+      );
+    }
+  }, []);
+
+  const [activeTab, setActiveTab] = useState<'drill' | 'progress'>('drill');
+  const [selectedLevel, setSelectedLevel] = useState<DrillLevel>(() =>
+    props.initialSpot !== undefined
+      ? (props.defaultLevel !== undefined && props.defaultLevel !== 0
+          ? props.defaultLevel
+          : 1)
+      : (props.defaultLevel ?? initialLoad.state.lastSelectedLevel),
+  );
+  const [selectedConcept, setSelectedConcept] = useState<DrillConceptId>(
+    () => props.defaultConcept ?? initialLoad.state.lastSelectedConcept,
+  );
+  const [selectedSourceMode, setSelectedSourceMode] = useState<'generated' | DrillFixtureId>(
+    'h1-step7',
+  );
+  const [seedCounter, setSeedCounter] = useState<number>(1);
+  const [muted, setMuted] = useState<boolean>(false);
+  const [reducedMotion, setReducedMotion] = useState<boolean>(false);
+
+  // Build initial spot (either from Sandbox `initialSpot` prop or canonical H1 #7 / concept spot)
+  const [currentSpot, setCurrentSpot] = useState<DrillSpot>(() => {
+    if (props.initialSpot !== undefined) {
+      return createDrillSpotFromHandState({
+        hand: props.initialSpot.hand,
+        heroId: props.initialSpot.heroId,
+        conceptId: props.defaultConcept ?? 'ev-comparison',
+      });
+    }
+    return buildFixtureDrillSpot('h1-step7');
+  });
+
+  const activeLevelForSession: ActiveDrillLevel = selectedLevel === 0 ? 1 : selectedLevel;
+  const [session, setSession] = useState<DrillSessionState>(() =>
+    createDrillSession(currentSpot, activeLevelForSession),
+  );
+
+  // Physical chip selection state (Hero clicks individual chips from stack)
+  const [selectedChips, setSelectedChips] = useState<ChipCounts>(() => emptyChips());
+  const [chipHistory, setChipHistory] = useState<readonly Denomination[]>([]);
+  const [showExchangeDrawer, setShowExchangeDrawer] = useState<boolean>(false);
+  const [confirmingFreeFold, setConfirmingFreeFold] = useState<boolean>(false);
+  const [actionErrorVi, setActionErrorVi] = useState<string | null>(null);
+
+  // Form inputs for Level 1 & Level 2
+  const [step1InputStr, setStep1InputStr] = useState<string>('');
+  const [l2OutsStr, setL2OutsStr] = useState<string>('');
+  const [l2TurnPctStr, setL2TurnPctStr] = useState<string>('');
+  const [l2RiverPctStr, setL2RiverPctStr] = useState<string>('');
+  const [l2PotOddsStr, setL2PotOddsStr] = useState<string>('');
+  const [boardTextureChoice, setBoardTextureChoice] = useState<BoardTextureClass>('wet');
+
+  // UI-layer clock for tracking response time & Level 3 countdown
+  const spotStartTimeRef = useRef<number>(0);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(persistedState.clockSeconds);
+
+  const resetInputsForSpot = useCallback(
+    (spot: DrillSpot, lvl: ActiveDrillLevel) => {
+      setSession(createDrillSession(spot, lvl));
+      setSelectedChips(emptyChips());
+      setChipHistory([]);
+      setShowExchangeDrawer(false);
+      setConfirmingFreeFold(false);
+      setActionErrorVi(null);
+      setStep1InputStr('');
+      setL2OutsStr(String(spot.solution.expectedOuts));
+      setL2TurnPctStr(spot.solution.nextCardExactPercent.toFixed(2));
+      setL2RiverPctStr(spot.solution.toRiverExactPercent.toFixed(2));
+      setL2PotOddsStr(spot.solution.potOdds.requiredEquityPercent.toFixed(1));
+      setBoardTextureChoice(spot.solution.boardTexture.classification);
+      spotStartTimeRef.current = safeNowMs();
+      setRemainingSeconds(persistedState.clockSeconds);
+    },
+    [persistedState.clockSeconds],
+  );
+
+  // Re-sync when `props.initialSpot` changes from Sandbox
+  useEffect(() => {
+    if (props.initialSpot !== undefined) {
+      const nextSpot = createDrillSpotFromHandState({
+        hand: props.initialSpot.hand,
+        heroId: props.initialSpot.heroId,
+        conceptId: selectedConcept,
+      });
+      setCurrentSpot(nextSpot);
+      const targetLvl: ActiveDrillLevel = selectedLevel === 0 ? 1 : selectedLevel;
+      if (selectedLevel === 0) {
+        setSelectedLevel(1);
+      }
+      resetInputsForSpot(nextSpot, targetLvl);
+    }
+  }, [props.initialSpot, resetInputsForSpot, selectedConcept, selectedLevel]);
+
+  const loadNewSpot = useCallback(
+    (
+      mode: 'generated' | DrillFixtureId,
+      concept: DrillConceptId,
+      nextCounter: number,
+      targetLevel: DrillLevel,
+    ) => {
+      const nextSpot =
+        mode === 'generated'
+          ? generateDrillSpot({
+              seed: `drill-seed:${concept}:${nextCounter}`,
+              conceptId: concept,
+            })
+          : buildFixtureDrillSpot(mode, undefined, concept);
+
+      setCurrentSpot(nextSpot);
+      const activeLvl: ActiveDrillLevel = targetLevel === 0 ? 1 : targetLevel;
+      resetInputsForSpot(nextSpot, activeLvl);
+      soundRef.current?.play({ kind: 'card-flip' }, `spot-load:${nextSpot.spotId}:${nextCounter}`);
+    },
+    [resetInputsForSpot],
+  );
+
+  const handleSelectLevel = (lvl: DrillLevel) => {
+    setSelectedLevel(lvl);
+    persistState(updateDrillPreferences(persistedState, { lastSelectedLevel: lvl }));
+    if (lvl !== 0) {
+      resetInputsForSpot(currentSpot, lvl);
+    }
+  };
+
+  const handleSelectConcept = (cid: DrillConceptId) => {
+    setSelectedConcept(cid);
+    persistState(updateDrillPreferences(persistedState, { lastSelectedConcept: cid }));
+    if (selectedLevel !== 0) {
+      const nextCount = seedCounter + 1;
+      setSeedCounter(nextCount);
+      loadNewSpot(selectedSourceMode, cid, nextCount, selectedLevel);
+    }
+  };
+
+  const handleSelectMilestone = (val: 'generated' | DrillFixtureId) => {
+    setSelectedSourceMode(val);
+    const nextCount = seedCounter + 1;
+    setSeedCounter(nextCount);
+    loadNewSpot(val, selectedConcept, nextCount, selectedLevel);
+  };
+
+  // Level 3 countdown timer in UI layer
+  useEffect(() => {
+    if (
+      activeTab !== 'drill' ||
+      selectedLevel !== 3 ||
+      session.phase !== 'answering'
+    ) {
+      return;
+    }
+
+    const totalSec = persistedState.clockSeconds;
+    setRemainingSeconds(totalSec);
+    const startTs = safeNowMs();
+    spotStartTimeRef.current = startTs;
+
+    const timerId = window.setInterval(() => {
+      const nowTs = safeNowMs();
+      const elapsedMs = Math.max(0, nowTs - startTs);
+      const leftSec = Math.max(0, Math.ceil(totalSec - elapsedMs / 1000));
+      setRemainingSeconds(leftSec);
+
+      if (leftSec > 0 && leftSec <= 3) {
+        soundRef.current?.play({ kind: 'tick' }, `tick:${currentSpot.spotId}:${leftSec}`);
+      }
+
+      if (elapsedMs >= totalSec * 1000) {
+        window.clearInterval(timerId);
+        // Auto-act on timeout (D36: check if legal, else fold; unconfirmed chips returned to stack)
+        setSelectedChips(emptyChips());
+        setChipHistory([]);
+        const timeoutAction = resolveLevel3TimeoutAction(currentSpot);
+        const res = submitLevel3Decision(session, {
+          action: timeoutAction,
+          responseTimeMs: totalSec * 1000,
+          timedOut: true,
+          boardTexture: boardTextureChoice,
+          sequenceIndex: persistedState.nextSequenceIndex,
+          autoCompleteHand: true,
+        });
+        if (res.ok) {
+          setSession(res.session);
+          if (res.session.attemptRecord !== null) {
+            persistState(recordCompletedAttempt(persistedState, res.session.attemptRecord));
+          }
+          soundRef.current?.play(
+            { kind: res.session.postHandFeedback?.isDecisionCorrect ? 'correct' : 'incorrect' },
+            `timeout-done:${currentSpot.spotId}`,
+          );
+        }
+      }
+    }, 250);
+
+    return () => window.clearInterval(timerId);
+  }, [
+    activeTab,
+    boardTextureChoice,
+    currentSpot,
+    persistState,
+    persistedState,
+    selectedLevel,
+    session,
+  ]);
+
+  const heroSeat = useMemo(
+    () => currentSpot.handState.seats.find((s) => s.playerId === currentSpot.heroId)!,
+    [currentSpot],
+  );
+
+  const availableHeroStack = useMemo(
+    () => subtractChips(heroSeat.stack, selectedChips),
+    [heroSeat.stack, selectedChips],
+  );
+
+  const selectedChipsTotal = useMemo(() => chipValue(selectedChips), [selectedChips]);
+
+  const legalActions = useMemo(
+    () => getLegalActions(currentSpot.handState),
+    [currentSpot.handState],
+  );
+
+  const exchangeOptions = useMemo(
+    () => findAvailableChipExchanges(currentSpot.handState, currentSpot.heroId),
+    [currentSpot.handState, currentSpot.heroId],
+  );
+
+  const handleAddChip = (denom: Denomination) => {
+    if (availableHeroStack[denom] < 1 || session.phase !== 'answering') {
+      return;
+    }
+    const delta: ChipCounts = {
+      5: denom === 5 ? 1 : 0,
+      10: denom === 10 ? 1 : 0,
+      50: denom === 50 ? 1 : 0,
+      100: denom === 100 ? 1 : 0,
+    };
+    setSelectedChips((prev) => addChips(prev, delta));
+    setChipHistory((prev) => [...prev, denom]);
+    setActionErrorVi(null);
+    soundRef.current?.play({ kind: 'chip', denomination: denom });
+  };
+
+  const handleUndoLastChip = () => {
+    if (chipHistory.length === 0) {
+      return;
+    }
+    const lastDenom = chipHistory[chipHistory.length - 1]!;
+    if (selectedChips[lastDenom] < 1) {
+      return;
+    }
+    const delta: ChipCounts = {
+      5: lastDenom === 5 ? 1 : 0,
+      10: lastDenom === 10 ? 1 : 0,
+      50: lastDenom === 50 ? 1 : 0,
+      100: lastDenom === 100 ? 1 : 0,
+    };
+    setSelectedChips((prev) => subtractChips(prev, delta));
+    setChipHistory((prev) => prev.slice(0, -1));
+    setActionErrorVi(null);
+  };
+
+  const handleClearChips = () => {
+    setSelectedChips(emptyChips());
+    setChipHistory([]);
+    setActionErrorVi(null);
+  };
+
+  const handleAutoPickChips = (targetAmount: number) => {
+    const picked = selectPhysicalChipsForAmount(heroSeat.stack, targetAmount);
+    if (picked === null) {
+      setActionErrorVi(
+        `Stack hiện tại không đủ chip lẻ để ghép đúng ${targetAmount} điểm. Hãy bấm "Đổi chip" để đổi mệnh giá lớn lấy chip nhỏ!`,
+      );
+      setShowExchangeDrawer(true);
+      return;
+    }
+    setSelectedChips(picked);
+    const history: Denomination[] = [];
+    for (const d of DENOMINATIONS) {
+      for (let i = 0; i < picked[d]; i++) {
+        history.push(d);
+      }
+    }
+    setChipHistory(history);
+    setActionErrorVi(null);
+    soundRef.current?.play({ kind: 'chip', denomination: 10 });
+  };
+
+  const handleExecuteExchange = (opt: ChipExchangeHelperOption) => {
+    const res = exchangeHandChips(currentSpot.handState, {
+      fromPlayerId: currentSpot.heroId,
+      target: opt.target,
+      give: opt.give,
+      receive: opt.receive,
+    });
+    if (!res.ok) {
+      setActionErrorVi(`Không thể đổi chip: ${res.message}`);
+      return;
+    }
+    const updatedSpot: DrillSpot = Object.freeze({
+      ...currentSpot,
+      handState: res.state,
+    });
+    setCurrentSpot(updatedSpot);
+    setSession((prev) => Object.freeze({ ...prev, spot: updatedSpot }));
+    setSelectedChips(emptyChips());
+    setChipHistory([]);
+    setShowExchangeDrawer(false);
+    setActionErrorVi(null);
+    soundRef.current?.play({ kind: 'chip', denomination: 5 });
+  };
+
+  const computeElapsedMs = (): number => {
+    const now = safeNowMs();
+    return Math.max(100, Math.round(now - spotStartTimeRef.current));
+  };
+
+  // Validate and construct BettingAction from user's physical chip selection
+  const buildActionFromSelection = (
+    kind: BettingAction['type'],
+  ): { readonly ok: true; readonly action: BettingAction } | { readonly ok: false; readonly messageVi: string } => {
+    if (legalActions === null) {
+      return { ok: false, messageVi: 'Không ở trong vòng cược hợp lệ.' };
+    }
+
+    switch (kind) {
+      case 'fold':
+        return { ok: true, action: { type: 'fold' } };
+
+      case 'check':
+        if (!legalActions.canCheck) {
+          return {
+            ok: false,
+            messageVi: `Không thể Check khi đang đối mặt mức cược ${legalActions.toCall} điểm.`,
+          };
+        }
+        return { ok: true, action: { type: 'check' } };
+
+      case 'call': {
+        if (!legalActions.canCall || legalActions.callAmount === null) {
+          return { ok: false, messageVi: 'Không có khoản cược nào cần Call.' };
+        }
+        if (!selectionMatches(selectedChips, legalActions.callAmount)) {
+          return {
+            ok: false,
+            messageVi: `Cần chọn đúng ${legalActions.callAmount} điểm chip vật lý để Call (bạn đang chọn ${selectedChipsTotal} điểm).`,
+          };
+        }
+        return { ok: true, action: { type: 'call', chips: selectedChips } };
+      }
+
+      case 'bet': {
+        if (!legalActions.canBet || legalActions.betRange === null) {
+          return { ok: false, messageVi: 'Không thể Bet khi đã có người mở cược trên street này.' };
+        }
+        const { min, max, step } = legalActions.betRange;
+        if (
+          selectedChipsTotal < min ||
+          selectedChipsTotal > max ||
+          selectedChipsTotal % step !== 0
+        ) {
+          return {
+            ok: false,
+            messageVi: `Khoản Bet phải là bội số của ${step} từ ${min} đến ${max} (bạn đang chọn ${selectedChipsTotal} điểm).`,
+          };
+        }
+        return {
+          ok: true,
+          action: { type: 'bet', amount: selectedChipsTotal, chips: selectedChips },
+        };
+      }
+
+      case 'raise': {
+        if (!legalActions.canRaise || legalActions.raiseRange === null) {
+          return {
+            ok: false,
+            messageVi: `Không thể Raise (mức cược hiện hành ${legalActions.currentBet} đã chạm cap ${legalActions.streetCap}).`,
+          };
+        }
+        const raiseTo = legalActions.playerStreetContribution + selectedChipsTotal;
+        const { min, max, step } = legalActions.raiseRange;
+        if (raiseTo < min || raiseTo > max || raiseTo % step !== 0) {
+          return {
+            ok: false,
+            messageVi: `Mức Raise lên phải là bội số của ${step} từ ${min} đến ${max} (tức bỏ thêm từ ${min - legalActions.playerStreetContribution} đến ${max - legalActions.playerStreetContribution}; bạn đang chọn thêm ${selectedChipsTotal} → tổng ${raiseTo}).`,
+          };
+        }
+        return {
+          ok: true,
+          action: { type: 'raise', raiseTo, chips: selectedChips },
+        };
+      }
+    }
+  };
+
+  // Level 1 numeric step submission (Steps 1..5)
+  const handleSubmitLevel1Numeric = () => {
+    if (session.currentStepId === 'action') {
+      return;
+    }
+    const parsed = Number(step1InputStr.trim().replace(',', '.'));
+    if (step1InputStr.trim() === '' || Number.isNaN(parsed)) {
+      setActionErrorVi('Vui lòng nhập một con số hợp lệ cho bước này.');
+      return;
+    }
+    const res = submitLevel1Step(session, {
+      stepId: session.currentStepId,
+      value: parsed,
+    });
+    if (!res.ok) {
+      setActionErrorVi(res.message);
+      return;
+    }
+    setSession(res.session);
+    setActionErrorVi(null);
+    setStep1InputStr('');
+    soundRef.current?.play(
+      { kind: res.evaluation.isCorrect ? 'correct' : 'incorrect' },
+      `L1-step:${currentSpot.spotId}:${res.evaluation.stepId}:${parsed}`,
+    );
+  };
+
+  // Action submission for Level 1 (Step 6), Level 2, or Level 3
+  const handleConfirmAction = (kind: BettingAction['type']) => {
+    // Ask confirmation if hero clicks Fold when Check is free (Spec §3.3)
+    if (kind === 'fold' && legalActions?.canCheck && !confirmingFreeFold) {
+      setConfirmingFreeFold(true);
+      setActionErrorVi(
+        'Bạn có thể Check miễn phí (0 điểm). Bấm "Fold" thêm một lần nữa nếu bạn thật sự muốn bỏ bài.',
+      );
+      return;
+    }
+    setConfirmingFreeFold(false);
+
+    const built = buildActionFromSelection(kind);
+    if (!built.ok) {
+      setActionErrorVi(built.messageVi);
+      soundRef.current?.play({ kind: 'incorrect' });
+      return;
+    }
+
+    const elapsedMs = computeElapsedMs();
+
+    if (selectedLevel === 1) {
+      const res = submitLevel1Step(session, {
+        stepId: 'action',
+        action: built.action,
+        boardTexture: boardTextureChoice,
+        responseTimeMs: elapsedMs,
+        sequenceIndex: persistedState.nextSequenceIndex,
+        autoCompleteHand: true,
+      });
+      if (!res.ok) {
+        setActionErrorVi(res.message);
+        return;
+      }
+      setSession(res.session);
+      setActionErrorVi(null);
+      if (res.session.attemptRecord !== null) {
+        persistState(recordCompletedAttempt(persistedState, res.session.attemptRecord));
+      }
+      soundRef.current?.play(
+        { kind: res.evaluation.isCorrect ? 'correct' : 'incorrect' },
+        `L1-done:${currentSpot.spotId}`,
+      );
+      return;
+    }
+
+    if (selectedLevel === 2) {
+      const outsVal = Number(l2OutsStr.trim().replace(',', '.'));
+      const turnPctVal =
+        l2TurnPctStr.trim() !== ''
+          ? Number(l2TurnPctStr.trim().replace(',', '.'))
+          : undefined;
+      const riverPctVal = Number(l2RiverPctStr.trim().replace(',', '.'));
+      const potOddsVal = Number(l2PotOddsStr.trim().replace(',', '.'));
+
+      if (
+        l2OutsStr.trim() === '' ||
+        l2RiverPctStr.trim() === '' ||
+        l2PotOddsStr.trim() === '' ||
+        Number.isNaN(outsVal) ||
+        Number.isNaN(riverPctVal) ||
+        Number.isNaN(potOddsVal)
+      ) {
+        setActionErrorVi(
+          'Ở Cấp 2 (Tự giải), vui lòng nhập đủ Số Outs, % trúng tới River và Pot Odds (%) trước khi xác nhận hành động.',
+        );
+        return;
+      }
+
+      // First enter 'action-submitted' so ONLY the 1-line summary is shown (AC D2)
+      const res = submitLevel2Decision(session, {
+        outs: outsVal,
+        ...(turnPctVal !== undefined && !Number.isNaN(turnPctVal)
+          ? { turnPercent: turnPctVal }
+          : {}),
+        riverPercent: riverPctVal,
+        potOddsPercent: potOddsVal,
+        boardTexture: boardTextureChoice,
+        action: built.action,
+        responseTimeMs: elapsedMs,
+        sequenceIndex: persistedState.nextSequenceIndex,
+        autoCompleteHand: false,
+      });
+      if (!res.ok) {
+        setActionErrorVi(res.message);
+        return;
+      }
+      setSession(res.session);
+      setActionErrorVi(null);
+      if (res.session.attemptRecord !== null) {
+        persistState(recordCompletedAttempt(persistedState, res.session.attemptRecord));
+      }
+      soundRef.current?.play(
+        { kind: res.session.postHandFeedback?.isDecisionCorrect ? 'correct' : 'incorrect' },
+        `L2-act:${currentSpot.spotId}`,
+      );
+      return;
+    }
+
+    if (selectedLevel === 3) {
+      const res = submitLevel3Decision(session, {
+        action: built.action,
+        responseTimeMs: elapsedMs,
+        timedOut: false,
+        boardTexture: boardTextureChoice,
+        sequenceIndex: persistedState.nextSequenceIndex,
+        autoCompleteHand: true,
+      });
+      if (!res.ok) {
+        setActionErrorVi(res.message);
+        return;
+      }
+      setSession(res.session);
+      setActionErrorVi(null);
+      if (res.session.attemptRecord !== null) {
+        persistState(recordCompletedAttempt(persistedState, res.session.attemptRecord));
+      }
+      soundRef.current?.play(
+        { kind: res.session.postHandFeedback?.isDecisionCorrect ? 'correct' : 'incorrect' },
+        `L3-done:${currentSpot.spotId}`,
+      );
+    }
+  };
+
+  const handleFinalizeLevel2Hand = () => {
+    const res = finalizeDrillSessionHand(session);
+    if (res.ok) {
+      setSession(res.session);
+      soundRef.current?.play({ kind: 'payout' }, `L2-fin:${currentSpot.spotId}`);
+    }
+  };
+
+  const handleRequestHint = () => {
+    const res = requestDrillHint(session);
+    if (res.ok) {
+      setSession(res.session);
+    } else {
+      setActionErrorVi(res.message);
+    }
+  };
+
+  const visibleFeedback = useMemo(() => getVisibleFeedback(session), [session]);
+  const progressReport = useMemo(
+    () => buildDrillProgressReport(persistedState),
+    [persistedState],
+  );
+
+  // Check button eligibility based on physical chips selected
+  const isCallConfirmable =
+    legalActions !== null &&
+    legalActions.canCall &&
+    legalActions.callAmount !== null &&
+    selectionMatches(selectedChips, legalActions.callAmount);
+
+  const isBetConfirmable =
+    legalActions !== null &&
+    legalActions.canBet &&
+    legalActions.betRange !== null &&
+    selectedChipsTotal >= legalActions.betRange.min &&
+    selectedChipsTotal <= legalActions.betRange.max &&
+    selectedChipsTotal % legalActions.betRange.step === 0;
+
+  const targetRaiseTo =
+    (legalActions?.playerStreetContribution ?? 0) + selectedChipsTotal;
+  const isRaiseConfirmable =
+    legalActions !== null &&
+    legalActions.canRaise &&
+    legalActions.raiseRange !== null &&
+    selectedChipsTotal > 0 &&
+    targetRaiseTo >= legalActions.raiseRange.min &&
+    targetRaiseTo <= legalActions.raiseRange.max &&
+    targetRaiseTo % legalActions.raiseRange.step === 0;
+
+  const displayedHandState =
+    session.phase === 'hand-completed' && session.postHandFeedback !== null
+      ? session.postHandFeedback.completedHandState
+      : session.phase === 'action-submitted' && session.stateAfterHeroAction !== null
+        ? session.stateAfterHeroAction
+        : currentSpot.handState;
+
+  return (
+    <div className={`accate-drill-root${reducedMotion ? ' drill-reduced-motion' : ''}`}>
+      <style>{DRILL_SCOPED_CSS}</style>
+
+      <div className="drill-shell">
+        {/* Top Bar */}
+        <header className="drill-topbar">
+          <div className="drill-brand">
+            <div>
+              <h1 className="drill-brand-title">Accate Trainer — Mode Drill</h1>
+              <div className="drill-brand-sub">
+                4 cấp tự do · Chip vật lý 5/10/50/100 · Cap 50 mỗi street · 9 Rival
+              </div>
+            </div>
+          </div>
+
+          <nav className="drill-nav-group" aria-label="Điều hướng chính trong Drill">
+            <button
+              type="button"
+              className={`drill-btn${activeTab === 'drill' ? ' drill-btn-active' : ''}`}
+              onClick={() => setActiveTab('drill')}
+            >
+              🎯 Bàn Luyện tập (Drill)
+            </button>
+            <button
+              type="button"
+              className={`drill-btn${activeTab === 'progress' ? ' drill-btn-active' : ''}`}
+              onClick={() => setActiveTab('progress')}
+            >
+              📊 Tiến bộ (8 Chỉ số §10)
+            </button>
+            <button
+              type="button"
+              className="drill-btn"
+              aria-pressed={!muted}
+              onClick={() => {
+                const next = !muted;
+                setMuted(next);
+                soundRef.current?.setMuted(next);
+              }}
+            >
+              {muted ? '🔇 Đang tắt âm' : '🔊 Âm thanh'}
+            </button>
+            <button
+              type="button"
+              className="drill-btn"
+              aria-pressed={reducedMotion}
+              onClick={() => setReducedMotion((v) => !v)}
+            >
+              {reducedMotion ? '🐢 Giảm motion: Bật' : '✨ Motion: Chuẩn'}
+            </button>
+            {props.onBackToSandbox !== undefined ? (
+              <button
+                type="button"
+                className="drill-btn"
+                onClick={props.onBackToSandbox}
+              >
+                ← Quay lại Bàn Sandbox
+              </button>
+            ) : null}
+          </nav>
+        </header>
+
+        {/* Level-up suggestion banner when >= 80% over last 20 attempts (AC D7) */}
+        {progressReport.overallLevelUpSuggestion.shouldSuggestLevelUp &&
+        progressReport.overallLevelUpSuggestion.messageVi !== null ? (
+          <div className="drill-banner drill-banner-good" role="status">
+            <span>🏆 {progressReport.overallLevelUpSuggestion.messageVi}</span>
+            {progressReport.overallLevelUpSuggestion.suggestedNextLevel !== null &&
+            progressReport.overallLevelUpSuggestion.suggestedNextLevel !== selectedLevel ? (
+              <button
+                type="button"
+                className="drill-btn drill-btn-primary"
+                onClick={() => {
+                  setActiveTab('drill');
+                  handleSelectLevel(progressReport.overallLevelUpSuggestion.suggestedNextLevel!);
+                }}
+              >
+                Thử sức ở Cấp {progressReport.overallLevelUpSuggestion.suggestedNextLevel} →
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {activeTab === 'progress' ? (
+          <ProgressView
+            report={progressReport}
+            storageAvailable={storageAvailable}
+            storageWarningVi={storageWarningVi}
+            onStartPractice={(lvl, cid) => {
+              setActiveTab('drill');
+              if (cid !== undefined) {
+                setSelectedConcept(cid);
+              }
+              handleSelectLevel(lvl);
+            }}
+            onResetProgress={() => {
+              const clean = createInitialDrillPersistedState();
+              persistState(clean);
+            }}
+          />
+        ) : (
+          <>
+            {/* Free Level Selection Bar & Spot / Concept Selectors (AC D7) */}
+            <section
+              className="drill-controls-bar"
+              aria-label="Chọn cấp độ tự do, khái niệm và tình huống"
+            >
+              <div className="drill-level-pills" role="group" aria-label="Chọn cấp độ (0 đến 3, không khóa)">
+                {DRILL_LEVELS.map((lvl) => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    className={`drill-btn${selectedLevel === lvl ? ' drill-btn-active' : ''}`}
+                    onClick={() => handleSelectLevel(lvl)}
+                  >
+                    {DRILL_LEVEL_TITLES_VI[lvl]}
+                  </button>
+                ))}
+              </div>
+
+              {selectedLevel !== 0 ? (
+                <div className="drill-select-group">
+                  <label htmlFor="drill-concept-select" className="drill-label">
+                    Khái niệm:
+                  </label>
+                  <select
+                    id="drill-concept-select"
+                    className="drill-select"
+                    value={selectedConcept}
+                    onChange={(e) => handleSelectConcept(e.target.value as DrillConceptId)}
+                  >
+                    {DRILL_CONCEPT_IDS.map((cid) => (
+                      <option key={cid} value={cid}>
+                        {DRILL_CONCEPT_TITLES_VI[cid]}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label htmlFor="drill-milestone-select" className="drill-label">
+                    Spot / Mốc AC:
+                  </label>
+                  <select
+                    id="drill-milestone-select"
+                    className="drill-select"
+                    value={selectedSourceMode}
+                    onChange={(e) =>
+                      handleSelectMilestone(e.target.value as 'generated' | DrillFixtureId)
+                    }
+                  >
+                    {MILESTONE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.labelVi}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedLevel === 3 ? (
+                    <>
+                      <label htmlFor="drill-clock-select" className="drill-label">
+                        Đồng hồ:
+                      </label>
+                      <select
+                        id="drill-clock-select"
+                        className="drill-select"
+                        value={persistedState.clockSeconds}
+                        onChange={(e) => {
+                          const sec = Number(e.target.value) as 10 | 15 | 20 | 25;
+                          persistState(updateDrillPreferences(persistedState, { clockSeconds: sec }));
+                          setRemainingSeconds(sec);
+                        }}
+                      >
+                        {([10, 15, 20, 25] as const).map((s) => (
+                          <option key={s} value={s}>
+                            {s} giây
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className="drill-btn drill-btn-primary"
+                    onClick={() => {
+                      const nextCount = seedCounter + 1;
+                      setSeedCounter(nextCount);
+                      loadNewSpot(selectedSourceMode, selectedConcept, nextCount, selectedLevel);
+                    }}
+                  >
+                    ↻ Ván / Spot mới
+                  </button>
+                </div>
+              ) : null}
+            </section>
+
+            {/* Level 0 Lesson View OR Levels 1-3 Table & Solver Workspace */}
+            {selectedLevel === 0 ? (
+              <LessonView
+                conceptId={selectedConcept}
+                completedLessons={persistedState.completedLessons}
+                onSelectConcept={(cid) => handleSelectConcept(cid)}
+                onCompleteAndPractice={(cid) => {
+                  const nextPersisted = updateDrillPreferences(
+                    markLessonCompleted(persistedState, cid),
+                    { lastSelectedLevel: 1, lastSelectedConcept: cid },
+                  );
+                  persistState(nextPersisted);
+                  setSelectedConcept(cid);
+                  setSelectedLevel(1);
+                  const nextCount = seedCounter + 1;
+                  setSeedCounter(nextCount);
+                  loadNewSpot('generated', cid, nextCount, 1);
+                }}
+              />
+            ) : (
+              <div className="drill-workspace">
+                {/* Left Column: Accate Felt Table & Hero Physical Chips */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <TableSnapshotView
+                    spot={currentSpot}
+                    currentHandState={displayedHandState}
+                    showShowdownCards={session.phase === 'hand-completed'}
+                  />
+
+                  {/* Physical Chip Selection Tray (Hero clicks individual chips, D19, C2, C3) */}
+                  <section
+                    className="drill-hero-zone"
+                    aria-label="Khay chọn chip vật lý của Hero (4 mệnh giá 5, 10, 50, 100)"
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 8,
+                      }}
+                    >
+                      <div>
+                        <strong style={{ color: 'var(--drill-accent)' }}>
+                          Khay bấm Chip vật lý (Mệnh giá 5 · 10 · 50 · 100)
+                        </strong>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--drill-text-muted)' }}>
+                          Bấm từng chip từ stack để tạo khoản cược hợp lệ · Đang chọn:{' '}
+                          <strong style={{ color: 'var(--drill-accent)', fontSize: '0.95rem' }}>
+                            {selectedChipsTotal} điểm
+                          </strong>
+                          {legalActions?.callAmount ? (
+                            <span> (Cần Call: {legalActions.callAmount} điểm)</span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="drill-nav-group">
+                        {legalActions?.canCall && legalActions.callAmount !== null ? (
+                          <button
+                            type="button"
+                            className="drill-btn"
+                            disabled={session.phase !== 'answering'}
+                            onClick={() => handleAutoPickChips(legalActions.callAmount!)}
+                          >
+                            ⚡ Ghép chip Call ({legalActions.callAmount})
+                          </button>
+                        ) : null}
+                        {legalActions?.canBet && legalActions.betRange !== null ? (
+                          <button
+                            type="button"
+                            className="drill-btn"
+                            disabled={session.phase !== 'answering'}
+                            onClick={() => handleAutoPickChips(legalActions.betRange!.max)}
+                          >
+                            ⚡ Ghép chip Cap ({legalActions.betRange.max})
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="drill-btn"
+                          disabled={chipHistory.length === 0 || session.phase !== 'answering'}
+                          onClick={handleUndoLastChip}
+                        >
+                          ↩ Bỏ chip vừa chọn
+                        </button>
+                        <button
+                          type="button"
+                          className="drill-btn"
+                          disabled={selectedChipsTotal === 0 || session.phase !== 'answering'}
+                          onClick={handleClearChips}
+                        >
+                          ✕ Xoá chọn
+                        </button>
+                        <button
+                          type="button"
+                          className="drill-btn"
+                          disabled={session.phase !== 'answering'}
+                          onClick={() => setShowExchangeDrawer((v) => !v)}
+                        >
+                          🔄 Đổi chip ({exchangeOptions.length})
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 4 Physical Denominations to Click */}
+                    <div className="drill-chip-rack">
+                      {DENOMINATIONS.map((denom) => {
+                        const avail = availableHeroStack[denom];
+                        const chosen = selectedChips[denom];
+                        return (
+                          <button
+                            key={denom}
+                            type="button"
+                            className="drill-chip-btn"
+                            disabled={avail < 1 || session.phase !== 'answering'}
+                            onClick={() => handleAddChip(denom)}
+                            aria-label={`Bấm thêm 1 chip mệnh giá ${denom} (còn ${avail} trong stack, đã chọn ${chosen})`}
+                          >
+                            <ChipToken denomination={denom} size={32} />
+                            <div style={{ textAlign: 'left' }}>
+                              <div>+{denom} điểm</div>
+                              <div style={{ fontSize: '0.73rem', color: 'var(--drill-text-muted)' }}>
+                                Còn: {avail} {chosen > 0 ? `· Chọn: ${chosen}` : ''}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Equal-Value Chip Exchange Drawer (AC C3, D20, D21) */}
+                    {showExchangeDrawer ? (
+                      <div
+                        className="drill-feedback-card"
+                        role="region"
+                        aria-label="Đổi chip lớn lấy chip nhỏ với Pot hoặc người chơi khác"
+                      >
+                        <div style={{ fontWeight: 700, color: 'var(--drill-accent)' }}>
+                          Đổi chip mệnh giá lớn lấy chip nhỏ (giữ nguyên tổng giá trị & INV-1):
+                        </div>
+                        {exchangeOptions.length === 0 ? (
+                          <div style={{ fontSize: '0.82rem', color: 'var(--drill-text-muted)' }}>
+                            Hiện không có phép đổi chip lớn nào khả dụng từ stack của bạn.
+                          </div>
+                        ) : (
+                          <div className="drill-nav-group">
+                            {exchangeOptions.map((opt, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                className="drill-btn"
+                                onClick={() => handleExecuteExchange(opt)}
+                              >
+                                {opt.labelVi}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </section>
+                </div>
+
+                {/* Right Column: Level 1 / Level 2 / Level 3 Question, Action Controls & Feedback */}
+                <aside className="drill-action-panel" aria-label="Bảng câu hỏi, hành động và lời giải Drill">
+                  {/* Level header & Level 3 Timer */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <div>
+                      <h3 style={{ margin: 0, color: 'var(--drill-accent)', fontSize: '1.05rem' }}>
+                        {DRILL_LEVEL_TITLES_VI[selectedLevel]}
+                      </h3>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--drill-text-muted)' }}>
+                        {selectedLevel === 1
+                          ? 'Trả lời từng bước theo thứ tự D1 · Hint miễn phí · Feedback ngay sau mỗi bước'
+                          : selectedLevel === 2
+                            ? 'Nhập đầy đủ trong một lượt · Có hint (ghi vào chỉ số) · 1 dòng sau action, phân tích đủ sau ván'
+                            : 'Quyết định dưới áp lực đồng hồ · Không có hint · Feedback chỉ hiện sau khi kết thúc ván'}
+                      </div>
+                    </div>
+
+                    {selectedLevel !== 3 && session.phase === 'answering' ? (
+                      <button
+                        type="button"
+                        className="drill-btn"
+                        onClick={handleRequestHint}
+                      >
+                        💡 {selectedLevel === 1 ? 'Gợi ý miễn phí' : 'Xem gợi ý (ghi chỉ số)'}
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {/* Level 3 Countdown Clock */}
+                  {selectedLevel === 3 ? (
+                    <div
+                      className={`drill-timer-box${remainingSeconds <= 3 && session.phase === 'answering' ? ' drill-timer-urgent' : ''}`}
+                      role="timer"
+                      aria-live="polite"
+                    >
+                      <span>
+                        ⏱ Đồng hồ Cấp 3 (hết giờ tự {legalActions?.canCheck ? 'Check' : 'Fold'}):
+                      </span>
+                      <strong style={{ fontSize: '1.15rem' }}>
+                        {session.phase === 'answering'
+                          ? `${remainingSeconds} giây`
+                          : session.timedOut
+                            ? 'Hết giờ (Auto)'
+                            : `Đã chốt (${((session.responseTimeMs ?? 0) / 1000).toFixed(1).replace('.', ',')}s)`}
+                      </strong>
+                    </div>
+                  ) : null}
+
+                  {/* Active Hint Banner (Levels 1 & 2 only) */}
+                  {session.lastHintVi !== null && selectedLevel !== 3 ? (
+                    <div className="drill-banner drill-banner-warn" role="status">
+                      <span>💡 {session.lastHintVi}</span>
+                    </div>
+                  ) : null}
+
+                  {/* Validation / Action Error Banner */}
+                  {actionErrorVi !== null ? (
+                    <div className="drill-banner drill-banner-bad" role="alert">
+                      <span>⚠️ {actionErrorVi}</span>
+                    </div>
+                  ) : null}
+
+                  {/* LEVEL 1: D1 Step-by-Step Flow */}
+                  {selectedLevel === 1 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div className="drill-step-track" role="list" aria-label="Tiến trình 6 bước D1">
+                        {LEVEL1_STEP_ORDER.map((stepId, idx) => {
+                          const evalItem = session.stepFeedbacks[stepId];
+                          const isCurrent =
+                            session.phase === 'answering' && session.currentStepIndex === idx;
+                          const pillClass = [
+                            'drill-step-pill',
+                            isCurrent ? 'drill-step-pill-current' : '',
+                            evalItem !== undefined
+                              ? evalItem.isCorrect
+                                ? 'drill-step-pill-done-ok'
+                                : 'drill-step-pill-done-err'
+                              : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ');
+                          return (
+                            <span key={stepId} className={pillClass} role="listitem">
+                              {STEP_LABELS_VI[stepId]}
+                              {evalItem !== undefined ? (evalItem.isCorrect ? ' ✓' : ' ✗') : ''}
+                            </span>
+                          );
+                        })}
+                      </div>
+
+                      {session.phase === 'answering' && session.currentStepId !== 'action' ? (
+                        <div className="drill-feedback-card">
+                          <label htmlFor="drill-l1-step-input" style={{ fontWeight: 700, color: 'var(--drill-accent)' }}>
+                            {session.currentStepId === 'outs'
+                              ? `Bước 1 — Đếm Outs: ${currentSpot.outsQuestionPromptVi}`
+                              : session.currentStepId === 'unseen-cards'
+                                ? 'Bước 2 — Số lá chưa biết trong bộ bài hiện tại là bao nhiêu?'
+                                : session.currentStepId === 'turn-percent'
+                                  ? 'Bước 3 — Xác suất trúng ở 1 lá tiếp theo (Turn) là bao nhiêu %?'
+                                  : session.currentStepId === 'river-percent'
+                                    ? 'Bước 4 — Xác suất trúng tới River là bao nhiêu %? (Có thể nhập chính xác hoặc Rule of 4)'
+                                    : `Bước 5 — Pot Odds (Equity cần để Call ${currentSpot.snapshot.callAmount} vào pot ${currentSpot.snapshot.potBeforeCall}) là bao nhiêu %?`}
+                          </label>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <input
+                              id="drill-l1-step-input"
+                              type="number"
+                              step="any"
+                              min="0"
+                              max="100"
+                              className="drill-input"
+                              style={{ flex: 1 }}
+                              placeholder={
+                                session.currentStepId === 'outs'
+                                  ? 'Nhập số nguyên (vd: 2 hoặc 8)'
+                                  : session.currentStepId === 'unseen-cards'
+                                    ? 'Nhập số lá (vd: 47 hoặc 46)'
+                                    : 'Nhập % (vd: 8.42 hoặc 30)'
+                              }
+                              value={step1InputStr}
+                              onChange={(e) => setStep1InputStr(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleSubmitLevel1Numeric();
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="drill-btn drill-btn-primary"
+                              onClick={handleSubmitLevel1Numeric}
+                            >
+                              Kiểm tra bước {session.currentStepIndex + 1} →
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {/* Immediate Per-Step Feedback List for Level 1 */}
+                      {Object.keys(visibleFeedback.stepFeedbacks).length > 0 ? (
+                        <div
+                          style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+                          aria-label="Phản hồi từng bước Cấp 1"
+                        >
+                          {LEVEL1_STEP_ORDER.map((stepId) => {
+                            const ev = visibleFeedback.stepFeedbacks[stepId];
+                            if (ev === undefined) {
+                              return null;
+                            }
+                            return (
+                              <div
+                                key={stepId}
+                                className={`drill-banner ${ev.isCorrect ? 'drill-banner-good' : 'drill-banner-bad'}`}
+                                role="status"
+                              >
+                                <div>
+                                  <strong>{ev.isCorrect ? '✓' : '✗'}</strong> {ev.feedbackVi}{' '}
+                                  <span style={{ fontSize: '0.75rem', opacity: 0.85 }}>
+                                    ({ev.lectureRef})
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {/* LEVEL 2: One-Shot Input Grid */}
+                  {selectedLevel === 2 && session.phase === 'answering' ? (
+                    <div className="drill-feedback-card" aria-label="Biểu mẫu tự giải một lượt Cấp 2">
+                      <div style={{ fontWeight: 700, color: 'var(--drill-accent)' }}>
+                        Nhập thông số tự giải (một lượt) rồi chọn chip & hành động:
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--drill-text-muted)' }}>
+                        Câu hỏi Outs: {currentSpot.outsQuestionPromptVi}
+                      </div>
+                      <div className="drill-field-grid">
+                        <div className="drill-field">
+                          <label htmlFor="l2-outs" className="drill-label">
+                            Số Outs (lá)
+                          </label>
+                          <input
+                            id="l2-outs"
+                            type="number"
+                            min="0"
+                            max="52"
+                            className="drill-input"
+                            value={l2OutsStr}
+                            onChange={(e) => setL2OutsStr(e.target.value)}
+                          />
+                        </div>
+                        <div className="drill-field">
+                          <label htmlFor="l2-turn-pct" className="drill-label">
+                            % Trúng 1 lá (Turn)
+                          </label>
+                          <input
+                            id="l2-turn-pct"
+                            type="number"
+                            step="any"
+                            min="0"
+                            max="100"
+                            className="drill-input"
+                            value={l2TurnPctStr}
+                            onChange={(e) => setL2TurnPctStr(e.target.value)}
+                          />
+                        </div>
+                        <div className="drill-field">
+                          <label htmlFor="l2-river-pct" className="drill-label">
+                            % Trúng tới River
+                          </label>
+                          <input
+                            id="l2-river-pct"
+                            type="number"
+                            step="any"
+                            min="0"
+                            max="100"
+                            className="drill-input"
+                            value={l2RiverPctStr}
+                            onChange={(e) => setL2RiverPctStr(e.target.value)}
+                          />
+                        </div>
+                        <div className="drill-field">
+                          <label htmlFor="l2-pot-odds" className="drill-label">
+                            Pot Odds / Equity cần (%)
+                          </label>
+                          <input
+                            id="l2-pot-odds"
+                            type="number"
+                            step="any"
+                            min="0"
+                            max="100"
+                            className="drill-input"
+                            value={l2PotOddsStr}
+                            onChange={(e) => setL2PotOddsStr(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Board Texture Quick Classifier (available when answering action) */}
+                  {session.phase === 'answering' &&
+                  (selectedLevel !== 1 || session.currentStepId === 'action') ? (
+                    <div className="drill-feedback-card">
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                        }}
+                      >
+                        <label htmlFor="drill-board-texture-select" className="drill-label">
+                          Đọc Board Texture (chỉ số #7):
+                        </label>
+                        <select
+                          id="drill-board-texture-select"
+                          className="drill-select"
+                          value={boardTextureChoice}
+                          onChange={(e) =>
+                            setBoardTextureChoice(e.target.value as BoardTextureClass)
+                          }
+                        >
+                          <option value="dry">Dry (Mặt bài khô)</option>
+                          <option value="wet">Wet (Mặt bài ướt)</option>
+                          <option value="draw-heavy">Nhiều draw (Draw-heavy)</option>
+                        </select>
+                      </div>
+
+                      {/* Legal Action Buttons (Enforcing engine legalActions & physical chip matching!) */}
+                      <div style={{ fontWeight: 700, color: 'var(--drill-accent)', marginTop: 4 }}>
+                        Chọn hành động hợp lệ (đã chọn {selectedChipsTotal} điểm chip vật lý):
+                      </div>
+                      <div className="drill-nav-group" role="group" aria-label="Các nút hành động cược hợp lệ">
+                        {/* FOLD */}
+                        <button
+                          type="button"
+                          className="drill-btn drill-btn-danger"
+                          disabled={!(legalActions?.canFold ?? false)}
+                          onClick={() => handleConfirmAction('fold')}
+                        >
+                          Fold
+                        </button>
+
+                        {/* CHECK: Strictly omitted when facing a bet (AC H1 #7, R5: Không có nút Check) */}
+                        {legalActions?.canCheck ? (
+                          <button
+                            type="button"
+                            className="drill-btn drill-btn-primary"
+                            onClick={() => handleConfirmAction('check')}
+                          >
+                            Check (0)
+                          </button>
+                        ) : null}
+
+                        {/* CALL: Locked until selected physical chips match callAmount (AC C2) */}
+                        {legalActions?.canCall && legalActions.callAmount !== null ? (
+                          <button
+                            type="button"
+                            className="drill-btn drill-btn-primary"
+                            disabled={!isCallConfirmable}
+                            onClick={() => handleConfirmAction('call')}
+                            title={
+                              isCallConfirmable
+                                ? `Xác nhận Call ${legalActions.callAmount}`
+                                : `Hãy chọn đúng ${legalActions.callAmount} điểm chip vật lý để mở khóa nút Call`
+                            }
+                          >
+                            {legalActions.isCallAllIn
+                              ? `Call All-in ${legalActions.callAmount}`
+                              : `Call ${legalActions.callAmount}`}
+                            {!isCallConfirmable ? ` (đang chọn ${selectedChipsTotal})` : ' ✓'}
+                          </button>
+                        ) : null}
+
+                        {/* BET: Shown when currentBet === 0 */}
+                        {legalActions?.canBet && legalActions.betRange !== null ? (
+                          <button
+                            type="button"
+                            className="drill-btn drill-btn-primary"
+                            disabled={!isBetConfirmable}
+                            onClick={() => handleConfirmAction('bet')}
+                          >
+                            Bet {isBetConfirmable ? selectedChipsTotal : `${legalActions.betRange.min}…${legalActions.betRange.max}`}
+                          </button>
+                        ) : null}
+
+                        {/* RAISE: Shown when facing a bet; disabled when currentBet === streetCap (AC H1 #13) */}
+                        {(legalActions?.toCall ?? 0) > 0 ? (
+                          <button
+                            type="button"
+                            className="drill-btn"
+                            disabled={!isRaiseConfirmable}
+                            onClick={() => handleConfirmAction('raise')}
+                          >
+                            {legalActions?.canRaise && legalActions.raiseRange !== null
+                              ? isRaiseConfirmable
+                                ? `Raise lên ${targetRaiseTo} (+${selectedChipsTotal})`
+                                : `Raise lên ${legalActions.raiseRange.min}…${legalActions.raiseRange.max} (+chip)`
+                              : `Raise (Đã chạm cap ${legalActions?.streetCap ?? 50})`}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* LEVEL 2 Immediate 1-Line Feedback right after action, BEFORE hand finishes (AC D2) */}
+                  {visibleFeedback.kind === 'one-line' ? (
+                    <div
+                      className="drill-feedback-card"
+                      role="status"
+                      aria-label="Phản hồi một dòng ngay sau hành động Cấp 2"
+                    >
+                      <div className="drill-banner drill-banner-good">
+                        <span>📌 {visibleFeedback.summaryLineVi}</span>
+                      </div>
+                      <div style={{ fontSize: '0.82rem', color: 'var(--drill-text-muted)' }}>
+                        (Cấp 2 chỉ hiện 1 dòng tóm tắt ngay sau khi chọn hành động. Bấm nút bên dưới để
+                        lật nốt ván bài và xem toàn bộ phân tích sau ván.)
+                      </div>
+                      <button
+                        type="button"
+                        className="drill-btn drill-btn-primary"
+                        onClick={handleFinalizeLevel2Hand}
+                      >
+                        Lật nốt ván & Xem phân tích đầy đủ sau ván →
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {/* Full Post-Hand Analysis (After hand completes in Level 1, 2, or 3) */}
+                  {visibleFeedback.kind === 'full-post-hand' &&
+                  visibleFeedback.fullAnalysis !== null ? (
+                    <div
+                      className="drill-feedback-card"
+                      role="region"
+                      aria-label="Phân tích đầy đủ sau ván"
+                    >
+                      <div
+                        className={`drill-banner ${
+                          visibleFeedback.fullAnalysis.isDecisionCorrect
+                            ? 'drill-banner-good'
+                            : 'drill-banner-bad'
+                        }`}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 800, fontSize: '0.98rem' }}>
+                            🏷 {visibleFeedback.fullAnalysis.decisionVsOutcomeBadgeVi} (
+                            {visibleFeedback.fullAnalysis.streetDecisionBadgeVi})
+                          </div>
+                          <div style={{ marginTop: 2 }}>
+                            {visibleFeedback.fullAnalysis.oneLineSummaryVi}
+                          </div>
+                          <div style={{ fontSize: '0.78rem', marginTop: 2, opacity: 0.9 }}>
+                            ⚖️ {visibleFeedback.fullAnalysis.independenceReminderVi}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div>
+                          <strong>• Lá cải thiện:</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.improvingCardsLineVi}
+                        </div>
+                        <div>
+                          <strong>• Outs (Clean / Mixed-Dirty / Chop):</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.outsLineVi}
+                        </div>
+                        <div>
+                          <strong>• % Trúng 1 lá & 2 lá (vs Rule of 2/4):</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.hitProbabilitiesLineVi}
+                        </div>
+                        <div>
+                          <strong>• Pot Odds:</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.potOddsLineVi}
+                        </div>
+                        <div>
+                          <strong>• Equity trước Range Rival:</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.equityVsRangeLineVi}
+                        </div>
+                        <div>
+                          <strong>• EV Quyết định & Spot rõ (&gt; 5%):</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.evAndClearSpotLineVi}
+                        </div>
+                        <div>
+                          <strong>• Board Texture & Đại diện bài:</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.boardTextureLineVi}
+                        </div>
+                        <div>
+                          <strong>• Bet Sizing (Luật vs Chiến thuật & Đuổi Draw D8):</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.sizingLineVi}
+                        </div>
+                        <div>
+                          <strong>• Kết quả ván bài:</strong>{' '}
+                          {visibleFeedback.fullAnalysis.breakdownVi.outcomeLineVi}
+                        </div>
+                      </div>
+
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ cursor: 'pointer', color: 'var(--drill-accent)', fontWeight: 700 }}>
+                          Chi tiết giả định trong lời giải (Range, Số đối thủ, Stack, Pot, Vị trí, Cap — D5)
+                        </summary>
+                        <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: '0.81rem' }}>
+                          {visibleFeedback.fullAnalysis.breakdownVi.assumptionsLinesVi.map(
+                            (line, i) => (
+                              <li key={i}>{line}</li>
+                            ),
+                          )}
+                        </ul>
+                      </details>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                          marginTop: 6,
+                        }}
+                      >
+                        <span className="drill-badge">
+                          📖 Nguồn bài giảng: {currentSpot.solution.lectureRef}
+                        </span>
+                        <div className="drill-nav-group">
+                          <button
+                            type="button"
+                            className="drill-btn"
+                            onClick={() => setActiveTab('progress')}
+                          >
+                            📊 Xem 8 Chỉ số Tiến bộ
+                          </button>
+                          <button
+                            type="button"
+                            className="drill-btn drill-btn-primary"
+                            onClick={() => {
+                              const nextCount = seedCounter + 1;
+                              setSeedCounter(nextCount);
+                              loadNewSpot(
+                                selectedSourceMode,
+                                selectedConcept,
+                                nextCount,
+                                selectedLevel,
+                              );
+                            }}
+                          >
+                            Spot kế tiếp →
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </aside>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default DrillApp;
