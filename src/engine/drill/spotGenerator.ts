@@ -923,7 +923,7 @@ export function completeDrillHand(
     ? `Pot odds (Equity cần): ${snapshot.callAmount} / (${snapshot.potBeforeCall} + ${snapshot.callAmount}) = ${snapshot.callAmount}/${solution.potOdds.potAfterCall} = ${formatPctVi(solution.potOdds.requiredEquity, 1)} (tỷ lệ pot-to-call ${snapshot.potBeforeCall}/${snapshot.callAmount} = ${solution.potOdds.potToCallLabel}).`
     : `Pot odds: Không phải call (0 / ${snapshot.potBeforeCall} = 0%).`;
 
-  const evAndClearSpotLineVi = `${solution.actionEvs.explanationVi} Chênh lệch |Equity − Equity cần| = ${solution.clearSpot.marginPp.toFixed(1).replace('.', ',')} điểm % (${solution.clearSpot.isClearSpot ? 'Spot rõ ràng > 5 điểm %' : 'Spot sát nút ≤ 5 điểm %, không tính phạt vào chỉ số spot rõ'}).`;
+  const evAndClearSpotLineVi = !solution.potOdds.hasCall ? `${solution.actionEvs.explanationVi} Không có lựa chọn Call nên không tính chỉ số Call/Fold.` : `${solution.actionEvs.explanationVi} Chênh lệch |Equity − Equity cần| = ${solution.clearSpot.marginPp.toFixed(1).replace('.', ',')} điểm % (${solution.clearSpot.isClearSpot ? 'Spot rõ ràng > 5 điểm %' : 'Spot sát nút ≤ 5 điểm %, không tính phạt vào chỉ số spot rõ'}).`;
 
   const boardTextureLineVi = `${solution.boardTexture.explanationVi} ${solution.boardTexture.rivalRepresentationVi[spot.primaryRivalId]}`;
 

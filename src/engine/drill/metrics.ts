@@ -251,7 +251,10 @@ export function aggregateDrillMetrics(
   // #4: Quyết định đúng ở spot rõ (strict > 5 pp threshold, target >= 90%, L2 slide 10–11, AC M3)
   const clearCounted = attempts.filter((a) => a.clearSpotMetric.counted);
   const clearCount = clearCounted.length;
-  const excludedMarginalCount = attempts.length - clearCount;
+  const excludedMarginalCount = attempts.filter((a) =>
+    a.clearSpotMetric.requiredEquity > 0 && a.clearSpotMetric.heroDecision !== null &&
+    !a.clearSpotMetric.isClearSpot,
+  ).length;
   const clearCorrectCount = clearCounted.filter(
     (a) => a.clearSpotMetric.isCorrect === true,
   ).length;

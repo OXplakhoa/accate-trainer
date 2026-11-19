@@ -82,6 +82,23 @@ function makeAttemptFixture(overrides: Partial<DrillAttemptRecord>, seq = 1): Dr
 }
 
 describe('P3 Drill — Metrics M1–M4, level-up suggestion D7, and resilient versioned storage', () => {
+  it('repairs legacy Check scoring without dropping the saved attempt', () => {
+    assertPureInv1();
+    const legacy = makeAttemptFixture({
+      actionTaken: 'check', actionAmount: 0,
+      clearSpotMetric: evaluateClearSpotDecision({ equity: 0.6, requiredEquity: 0, heroDecision: 'call' }),
+    });
+    const state = recordCompletedAttempt(createInitialDrillPersistedState(), legacy);
+    const restored = parseDrillPersistedState(JSON.stringify(state)).state;
+    expect(restored.attempts).toHaveLength(1);
+    expect(restored.attempts[0]!.clearSpotMetric).toMatchObject({
+      heroDecision: null, counted: false, isCorrect: null, isClearSpot: false,
+    });
+    const metrics = aggregateDrillMetrics(restored.attempts);
+    expect(metrics.clearSpotAccuracy.measuredCount).toBe(0);
+    expect(metrics.clearSpotAccuracy.excludedMarginalCount).toBe(0);
+  });
+
   it('M1: hero enters 9 outs when expected answer is 8 on dirty-outs-flop-oesd -> records incorrect outs metric with error +1', () => {
     const spot = buildFixtureDrillSpot(
       'dirty-outs-flop-oesd',

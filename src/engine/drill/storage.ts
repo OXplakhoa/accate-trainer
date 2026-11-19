@@ -126,11 +126,18 @@ function sanitizeAttemptRecord(raw: unknown, fallbackSeq: number): DrillAttemptR
   ) {
     return null;
   }
-  const clearSpotMetric = evaluateClearSpotDecision({
+  const heroDecision = actionTaken === 'call' || actionTaken === 'fold' ? actionTaken : null;
+  const evaluatedClear = evaluateClearSpotDecision({
     equity: eq,
     requiredEquity: reqEq,
-    heroDecision: actionTaken === 'fold' ? 'fold' : 'call',
+    heroDecision: heroDecision ?? 'call',
   });
+  // Old records lack hasCall; a positive required equity establishes a call cost.
+  const clearSpotMetric = reqEq > 0 && heroDecision !== null
+    ? evaluatedClear
+    : Object.freeze({ ...evaluatedClear, ...(reqEq === 0 ? {
+        isClearSpot: false, countsTowardClearSpotMetric: false, recommendedAction: 'marginal' as const,
+      } : {}), heroDecision, counted: false, isCorrect: null });
 
   // Optional outsMetric
   let outsMetric = null;

@@ -347,13 +347,15 @@ function buildAttemptRecord(params: {
         )
       : null;
 
-  const heroBinaryDecision: 'call' | 'fold' =
-    action.type === 'fold' ? 'fold' : 'call';
-  const clearSpotMetric = evaluateClearSpotDecision({
+  const heroDecision = action.type === 'call' || action.type === 'fold' ? action.type : null;
+  const evaluatedClear = evaluateClearSpotDecision({
     equity: solution.effectiveEquity,
     requiredEquity: solution.potOdds.requiredEquity,
-    heroDecision: heroBinaryDecision,
+    heroDecision: heroDecision ?? 'call',
   });
+  const clearSpotMetric = solution.potOdds.hasCall && heroDecision !== null
+    ? evaluatedClear
+    : Object.freeze({ ...evaluatedClear, ...solution.clearSpot, heroDecision, counted: false, isCorrect: null });
 
   const boardTextureMetric =
     inputs.boardTexture !== undefined

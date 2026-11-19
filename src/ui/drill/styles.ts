@@ -167,6 +167,8 @@ export const DRILL_SCOPED_CSS = `
 }
 
 .drill-select-group {
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -174,6 +176,8 @@ export const DRILL_SCOPED_CSS = `
 }
 
 .drill-select {
+  min-width: 0;
+  max-width: 100%;
   background: var(--drill-bg);
   color: var(--drill-text);
   border: 1px solid var(--drill-border);
@@ -214,7 +218,7 @@ export const DRILL_SCOPED_CSS = `
 
 .drill-workspace {
   display: grid;
-  grid-template-columns: 1.15fr 0.95fr;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
   gap: 14px;
   align-items: start;
 }
@@ -518,11 +522,12 @@ export const DRILL_SCOPED_CSS = `
 
 .drill-field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 10px;
 }
 
 .drill-field {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -573,7 +578,7 @@ export const DRILL_SCOPED_CSS = `
 
 .drill-progress-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 10px;
 }
 

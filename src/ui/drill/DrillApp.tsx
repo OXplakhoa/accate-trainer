@@ -80,16 +80,16 @@ const MILESTONE_OPTIONS: readonly {
   readonly value: 'generated' | DrillFixtureId;
   readonly labelVi: string;
 }[] = Object.freeze([
-  { value: 'generated', labelVi: '🎲 Sinh spot mới từ Engine (M1 + Rival M2)' },
-  { value: 'h1-step7', labelVi: '📌 H1 #7 — Flop J♠J♦ lên set trước Điên raise 30 (D1, D6)' },
-  { value: 'h1-step13', labelVi: '📌 H1 #13 — Turn 5♠ trước Điên bet cap 50 (22,7%)' },
-  { value: 'h1-step16', labelVi: '📌 H1 #16 — River K♣ trước Điên bet cap 50 (15,6%)' },
-  { value: 'd8-chase-draw', labelVi: '📌 Mốc D8 — Turn Pot 300, Bet 50 đuổi Flush Draw (12,5% vs 19,57%)' },
-  { value: 'dirty-outs-flop-oesd', labelVi: '📌 Mốc M1 — Đếm 8 Clean Outs & Trừ Outs bẩn Q♥ (L2 s24–27)' },
-  { value: 'clean-outs-turn-flush-draw', labelVi: '📌 Turn Nut Flush Draw 9/46 ≈ 19,57% (L2 s10–11)' },
-  { value: 'side-pot-multiway', labelVi: '📌 Side Pot (P1) — Chia Equity Main Pot 110 & Side Pot 40' },
-  { value: 'nong-tilt-spot', labelVi: '📌 Nóng đang Tilt (D45) — Range rộng ở mức Cap 50 (L8 s6)' },
-  { value: 'board-texture-wet-checkraise', labelVi: '📌 Bẫy Check-Raise trên Mặt bài Nhiều Draw T♥9♥8♣' },
+  { value: 'generated', labelVi: '🎲 Sinh tình huống mới' },
+  { value: 'h1-step7', labelVi: '📌 Đôi J ở Flop' },
+  { value: 'h1-step13', labelVi: '📌 H1 #13 — Turn 5♠' },
+  { value: 'h1-step16', labelVi: '📌 H1 #16 — River K♣' },
+  { value: 'd8-chase-draw', labelVi: '📌 Quyết định ở Turn' },
+  { value: 'dirty-outs-flop-oesd', labelVi: '📌 Tình huống ở Flop' },
+  { value: 'clean-outs-turn-flush-draw', labelVi: '📌 Tình huống ở Turn' },
+  { value: 'side-pot-multiway', labelVi: '📌 Tình huống Side Pot' },
+  { value: 'nong-tilt-spot', labelVi: '📌 Tình huống với Nóng' },
+  { value: 'board-texture-wet-checkraise', labelVi: '📌 Tình huống Check-Raise' },
 ]);
 
 function getBrowserLocalStorage(): Storage | null {
@@ -199,7 +199,7 @@ export function DrillApp(props: DrillAppProps) {
   const [l2TurnPctStr, setL2TurnPctStr] = useState<string>('');
   const [l2RiverPctStr, setL2RiverPctStr] = useState<string>('');
   const [l2PotOddsStr, setL2PotOddsStr] = useState<string>('');
-  const [boardTextureChoice, setBoardTextureChoice] = useState<BoardTextureClass>('wet');
+  const [boardTextureChoice, setBoardTextureChoice] = useState<BoardTextureClass | ''>('');
 
   // UI-layer clock for tracking response time & Level 3 countdown
   const spotStartTimeRef = useRef<number>(0);
@@ -214,11 +214,11 @@ export function DrillApp(props: DrillAppProps) {
       setConfirmingFreeFold(false);
       setActionErrorVi(null);
       setStep1InputStr('');
-      setL2OutsStr(String(spot.solution.expectedOuts));
-      setL2TurnPctStr(spot.solution.nextCardExactPercent.toFixed(2));
-      setL2RiverPctStr(spot.solution.toRiverExactPercent.toFixed(2));
-      setL2PotOddsStr(spot.solution.potOdds.requiredEquityPercent.toFixed(1));
-      setBoardTextureChoice(spot.solution.boardTexture.classification);
+      setL2OutsStr('');
+      setL2TurnPctStr('');
+      setL2RiverPctStr('');
+      setL2PotOddsStr('');
+      setBoardTextureChoice('');
       spotStartTimeRef.current = safeNowMs();
       setRemainingSeconds(persistedState.clockSeconds);
     },
@@ -325,7 +325,7 @@ export function DrillApp(props: DrillAppProps) {
           action: timeoutAction,
           responseTimeMs: totalSec * 1000,
           timedOut: true,
-          boardTexture: boardTextureChoice,
+          ...(boardTextureChoice !== '' ? { boardTexture: boardTextureChoice } : {}),
           sequenceIndex: persistedState.nextSequenceIndex,
           autoCompleteHand: true,
         });
@@ -592,6 +592,11 @@ export function DrillApp(props: DrillAppProps) {
 
     const elapsedMs = computeElapsedMs();
 
+    if (boardTextureChoice === '') {
+      setActionErrorVi('Hãy chọn đặc điểm mặt bài trước khi chọn hành động.');
+      return;
+    }
+
     if (selectedLevel === 1) {
       const res = submitLevel1Step(session, {
         stepId: 'action',
@@ -628,6 +633,8 @@ export function DrillApp(props: DrillAppProps) {
 
       if (
         l2OutsStr.trim() === '' ||
+        l2TurnPctStr.trim() === '' ||
+        turnPctVal === undefined || !Number.isFinite(turnPctVal) ||
         l2RiverPctStr.trim() === '' ||
         l2PotOddsStr.trim() === '' ||
         Number.isNaN(outsVal) ||
@@ -760,10 +767,7 @@ export function DrillApp(props: DrillAppProps) {
         <header className="drill-topbar">
           <div className="drill-brand">
             <div>
-              <h1 className="drill-brand-title">Accate Trainer — Mode Drill</h1>
-              <div className="drill-brand-sub">
-                4 cấp tự do · Chip vật lý 5/10/50/100 · Cap 50 mỗi street · 9 Rival
-              </div>
+              <h1 className="drill-brand-title">Accate Trainer — Bài tập</h1>
             </div>
           </div>
 
@@ -773,14 +777,14 @@ export function DrillApp(props: DrillAppProps) {
               className={`drill-btn${activeTab === 'drill' ? ' drill-btn-active' : ''}`}
               onClick={() => setActiveTab('drill')}
             >
-              🎯 Bàn Luyện tập (Drill)
+              Bài tập
             </button>
             <button
               type="button"
               className={`drill-btn${activeTab === 'progress' ? ' drill-btn-active' : ''}`}
               onClick={() => setActiveTab('progress')}
             >
-              📊 Tiến bộ (8 Chỉ số §10)
+              Tiến bộ
             </button>
             <button
               type="button"
@@ -891,7 +895,7 @@ export function DrillApp(props: DrillAppProps) {
                   </select>
 
                   <label htmlFor="drill-milestone-select" className="drill-label">
-                    Spot / Mốc AC:
+                    Tình huống:
                   </label>
                   <select
                     id="drill-milestone-select"
@@ -974,6 +978,7 @@ export function DrillApp(props: DrillAppProps) {
                     spot={currentSpot}
                     currentHandState={displayedHandState}
                     showShowdownCards={session.phase === 'hand-completed'}
+                    hidePrompt={session.phase !== 'hand-completed'}
                   />
 
                   {/* Physical Chip Selection Tray (Hero clicks individual chips, D19, C2, C3) */}
@@ -1130,7 +1135,7 @@ export function DrillApp(props: DrillAppProps) {
                       </h3>
                       <div style={{ fontSize: '0.8rem', color: 'var(--drill-text-muted)' }}>
                         {selectedLevel === 1
-                          ? 'Trả lời từng bước theo thứ tự D1 · Hint miễn phí · Feedback ngay sau mỗi bước'
+                          ? 'Trả lời từng bước theo thứ tự · Hint miễn phí · Feedback ngay sau mỗi bước'
                           : selectedLevel === 2
                             ? 'Nhập đầy đủ trong một lượt · Có hint (ghi vào chỉ số) · 1 dòng sau action, phân tích đủ sau ván'
                             : 'Quyết định dưới áp lực đồng hồ · Không có hint · Feedback chỉ hiện sau khi kết thúc ván'}
@@ -1185,7 +1190,7 @@ export function DrillApp(props: DrillAppProps) {
                   {/* LEVEL 1: D1 Step-by-Step Flow */}
                   {selectedLevel === 1 ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <div className="drill-step-track" role="list" aria-label="Tiến trình 6 bước D1">
+                      <div className="drill-step-track" role="list" aria-label="Tiến trình 6 bước">
                         {LEVEL1_STEP_ORDER.map((stepId, idx) => {
                           const evalItem = session.stepFeedbacks[stepId];
                           const isCurrent =
@@ -1214,7 +1219,7 @@ export function DrillApp(props: DrillAppProps) {
                         <div className="drill-feedback-card">
                           <label htmlFor="drill-l1-step-input" style={{ fontWeight: 700, color: 'var(--drill-accent)' }}>
                             {session.currentStepId === 'outs'
-                              ? `Bước 1 — Đếm Outs: ${currentSpot.outsQuestionPromptVi}`
+                              ? `Bước 1 — Đếm Outs: ${(currentSpot.fixtureId === 'dirty-outs-flop-oesd' ? 'Có bao nhiêu clean outs thắng sạch trước range của Đá?' : currentSpot.outsQuestionPromptVi)}`
                               : session.currentStepId === 'unseen-cards'
                                 ? 'Bước 2 — Số lá chưa biết trong bộ bài hiện tại là bao nhiêu?'
                                 : session.currentStepId === 'turn-percent'
@@ -1234,7 +1239,7 @@ export function DrillApp(props: DrillAppProps) {
                               style={{ flex: 1 }}
                               placeholder={
                                 session.currentStepId === 'outs'
-                                  ? 'Nhập số nguyên (vd: 2 hoặc 8)'
+                                  ? 'Nhập số nguyên'
                                   : session.currentStepId === 'unseen-cards'
                                     ? 'Nhập số lá (vd: 47 hoặc 46)'
                                     : 'Nhập % (vd: 8.42 hoặc 30)'
@@ -1297,7 +1302,7 @@ export function DrillApp(props: DrillAppProps) {
                         Nhập thông số tự giải (một lượt) rồi chọn chip & hành động:
                       </div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--drill-text-muted)' }}>
-                        Câu hỏi Outs: {currentSpot.outsQuestionPromptVi}
+                        Câu hỏi Outs: {(currentSpot.fixtureId === 'dirty-outs-flop-oesd' ? 'Có bao nhiêu clean outs thắng sạch trước range của Đá?' : currentSpot.outsQuestionPromptVi)}
                       </div>
                       <div className="drill-field-grid">
                         <div className="drill-field">
@@ -1377,16 +1382,17 @@ export function DrillApp(props: DrillAppProps) {
                         }}
                       >
                         <label htmlFor="drill-board-texture-select" className="drill-label">
-                          Đọc Board Texture (chỉ số #7):
+                          Đọc đặc điểm mặt bài:
                         </label>
                         <select
                           id="drill-board-texture-select"
                           className="drill-select"
                           value={boardTextureChoice}
                           onChange={(e) =>
-                            setBoardTextureChoice(e.target.value as BoardTextureClass)
+                            setBoardTextureChoice(e.target.value as BoardTextureClass | '')
                           }
                         >
+                          <option value="">Chọn đặc điểm mặt bài</option>
                           <option value="dry">Dry (Mặt bài khô)</option>
                           <option value="wet">Wet (Mặt bài ướt)</option>
                           <option value="draw-heavy">Nhiều draw (Draw-heavy)</option>
@@ -1553,7 +1559,7 @@ export function DrillApp(props: DrillAppProps) {
                           {visibleFeedback.fullAnalysis.breakdownVi.boardTextureLineVi}
                         </div>
                         <div>
-                          <strong>• Bet Sizing (Luật vs Chiến thuật & Đuổi Draw D8):</strong>{' '}
+                          <strong>• Bet Sizing (Luật vs Chiến thuật & Đuổi Draw):</strong>{' '}
                           {visibleFeedback.fullAnalysis.breakdownVi.sizingLineVi}
                         </div>
                         <div>
@@ -1564,7 +1570,7 @@ export function DrillApp(props: DrillAppProps) {
 
                       <details style={{ marginTop: 4 }}>
                         <summary style={{ cursor: 'pointer', color: 'var(--drill-accent)', fontWeight: 700 }}>
-                          Chi tiết giả định trong lời giải (Range, Số đối thủ, Stack, Pot, Vị trí, Cap — D5)
+                          Chi tiết giả định trong lời giải (Range, Số đối thủ, Stack, Pot, Vị trí, Cap)
                         </summary>
                         <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: '0.81rem' }}>
                           {visibleFeedback.fullAnalysis.breakdownVi.assumptionsLinesVi.map(

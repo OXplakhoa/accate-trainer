@@ -36,7 +36,7 @@ describe('P3 Drill — UI export, standalone rendering, and Sandbox initialSpot 
 
     // Standalone Level 1 render (default H1 #7 spot)
     const htmlL1 = renderStaticWithFixedClock(createElement(DrillApp, { defaultLevel: 1 }));
-    expect(htmlL1).toContain('Accate Trainer — Mode Drill');
+    expect(htmlL1).toContain('Accate Trainer — Bài tập');
     expect(htmlL1).toContain('Cấp 1 — Tính từng bước');
     expect(htmlL1).toContain('1. Đếm Outs');
     expect(htmlL1).toContain('2. Số lá chưa biết');
@@ -45,6 +45,8 @@ describe('P3 Drill — UI export, standalone rendering, and Sandbox initialSpot 
     expect(htmlL1).toContain('5. Pot Odds (%)');
     expect(htmlL1).toContain('6. Hành động &amp; Chip');
     expect(htmlL1).toContain('Gợi ý miễn phí');
+    expect(htmlL1).not.toContain('lá chưa biết</div>');
+    expect(htmlL1).not.toContain('Board: Mặt bài');
 
     // Standalone Level 0 render (Lessons)
     const htmlL0 = renderStaticWithFixedClock(
@@ -60,6 +62,10 @@ describe('P3 Drill — UI export, standalone rendering, and Sandbox initialSpot 
     expect(htmlL2).toContain('Cấp 2 — Tự giải');
     expect(htmlL2).toContain('Xem gợi ý (ghi chỉ số)');
     expect(htmlL2).toContain('Call 30');
+    expect(htmlL2).toMatch(/id="l2-outs"[^>]*value=""/);
+    expect(htmlL2).toMatch(/id="l2-turn-pct"[^>]*value=""/);
+    expect(htmlL2).toMatch(/id="l2-river-pct"[^>]*value=""/);
+    expect(htmlL2).toMatch(/id="l2-pot-odds"[^>]*value=""/);
 
     // Standalone Level 3 render (Timer + no hint button)
     const htmlL3 = renderStaticWithFixedClock(
@@ -69,6 +75,8 @@ describe('P3 Drill — UI export, standalone rendering, and Sandbox initialSpot 
     expect(htmlL3).toContain('Đồng hồ Cấp 3');
     expect(htmlL3).toContain('20 giây');
     expect(htmlL3).not.toContain('Gợi ý miễn phí');
+    expect(htmlL3).not.toContain('Board: Mặt bài');
+    expect(htmlL3).not.toContain('Còn 47 lá chưa biết');
     expect(htmlL3).not.toContain('Xem gợi ý (ghi chỉ số)');
   });
 
@@ -81,7 +89,7 @@ describe('P3 Drill — UI export, standalone rendering, and Sandbox initialSpot 
         initialSpot: { hand: step13TurnC, heroId: 'C' },
       }),
     );
-    expect(htmlSandbox).toContain('Spot từ Bàn chơi');
+    expect(htmlSandbox).toContain('Tình huống');
     expect(htmlSandbox).toContain('Pot: 170 điểm');
     expect(htmlSandbox).toContain('Cần Call:');
 

@@ -348,7 +348,7 @@ export interface DrillAttemptRecord {
   readonly outsMetric: OutsCountMetric | null;
   readonly outsPercentMetric: PercentagePointErrorMetric | null;
   readonly potOddsMetric: PercentagePointErrorMetric | null;
-  readonly clearSpotMetric: ClearSpotDecisionEvaluation;
+  readonly clearSpotMetric: Omit<ClearSpotDecisionEvaluation, 'heroDecision'> & { readonly heroDecision: 'call' | 'fold' | null };
   readonly boardTextureMetric: {
     readonly userClassification: BoardTextureClass;
     readonly expectedClassification: BoardTextureClass;

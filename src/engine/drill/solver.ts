@@ -676,7 +676,10 @@ export function buildDrillSpotSolution(input: BuildDrillSpotSolutionInput): {
   const sizingAnalysis = analyzeBetSizing(snapshot, effectiveEquity, potOdds);
 
   // Clear spot classification (strict > 5 percentage points threshold)
-  const clearSpot = classifyClearSpot(effectiveEquity, potOdds.requiredEquity);
+  const classification = classifyClearSpot(effectiveEquity, potOdds.requiredEquity);
+  const clearSpot = potOdds.hasCall ? classification : Object.freeze({
+    ...classification, isClearSpot: false, countsTowardClearSpotMetric: false, recommendedAction: 'marginal' as const,
+  });
 
   // Action EV calculations
   const foldEv = calculateFoldEv(assumptionsCtx);

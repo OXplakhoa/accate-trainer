@@ -267,6 +267,7 @@ export function TableSnapshotView(props: {
   readonly spot: DrillSpot;
   readonly currentHandState: HandState;
   readonly showShowdownCards: boolean;
+  readonly hidePrompt?: boolean;
 }) {
   const { spot, currentHandState, showShowdownCards } = props;
   const { snapshot, solution } = spot;
@@ -287,8 +288,8 @@ export function TableSnapshotView(props: {
     <section className="drill-felt-panel" aria-label="Bàn Accate mô phỏng">
       <div className="drill-spot-header">
         <div>
-          <h2 className="drill-spot-title">{spot.titleVi}</h2>
-          <p className="drill-spot-prompt">{spot.promptVi}</p>
+          <h2 className="drill-spot-title">{props.hidePrompt ? 'Tình huống' : spot.titleVi}</h2>
+          {!props.hidePrompt && <p className="drill-spot-prompt">{spot.promptVi}</p>}
         </div>
         <div className="drill-badges-row">
           <span className="drill-badge drill-badge-accent">
@@ -297,9 +298,7 @@ export function TableSnapshotView(props: {
           <span className="drill-badge">Cap street: {snapshot.streetCap}</span>
           <span className="drill-badge">Mở lời ván: {currentHandState.openerPlayerId}</span>
           <span className="drill-badge">{snapshot.position.label}</span>
-          <span className="drill-badge">
-            Board: {solution.boardTexture.labelVi}
-          </span>
+          {showShowdownCards && <span className="drill-badge">Board: {solution.boardTexture.labelVi}</span>}
         </div>
       </div>
 
@@ -307,7 +306,7 @@ export function TableSnapshotView(props: {
       <div className="drill-board-zone">
         <div>
           <div style={{ fontSize: '0.78rem', color: 'var(--drill-text-muted)', marginBottom: 6 }}>
-            Lá chung đã lật ({visibleBoard.length} lá) · Còn {solution.unseenCards} lá chưa biết
+            Lá chung đã lật ({visibleBoard.length} lá)
           </div>
           <div className="drill-cards-row">
             {visibleBoard.length > 0 ? (
@@ -326,10 +325,10 @@ export function TableSnapshotView(props: {
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--drill-text-muted)' }}>
             Mức cược hiện hành: <strong>{snapshot.currentBet}</strong> · Cần Call:{' '}
-            <strong>{snapshot.callAmount}</strong> ({solution.potOdds.potToCallLabel})
+            <strong>{snapshot.callAmount}</strong>
           </div>
           <ChipStackInline chips={currentHandState.pot} compact />
-          {solution.perPotEquity.length > 1 ? (
+          {showShowdownCards && solution.perPotEquity.length > 1 ? (
             <div style={{ fontSize: '0.75rem', color: 'var(--drill-accent)', marginTop: 2 }}>
               {solution.perPotEquity
                 .map((p) => `${p.labelVi}: ${p.potBeforeCall} (+${p.heroAddedAmount})`)

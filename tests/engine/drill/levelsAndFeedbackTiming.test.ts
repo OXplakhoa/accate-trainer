@@ -33,6 +33,25 @@ function assertInvariants(state: HandState): void {
 }
 
 describe('P3 Drill — Levels 0–3, D1 step sequence, hint policies, and feedback visibility timing (D1–D3, C2)', () => {
+  it('excludes a free Check from clear Call/Fold scoring', () => {
+    const spot = buildFixtureDrillSpot('d8-chase-draw', createRng('control-no-call-clear-metric'));
+    assertInvariants(spot.handState);
+    expect(spot.solution.potOdds.hasCall).toBe(false);
+    expect(spot.solution.clearSpot.isClearSpot).toBe(false);
+    const session = createDrillSession(spot, 3);
+    const result = submitLevel3Decision(session, {
+      action: { type: 'check' }, responseTimeMs: 1000,
+      rng: createRng('control-no-call-completion'), autoCompleteHand: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    assertInvariants(result.session.spot.handState);
+    expect(result.session.attemptRecord?.clearSpotMetric).toMatchObject({
+      heroDecision: null, counted: false, isCorrect: null, isClearSpot: false,
+    });
+    if (result.session.postHandFeedback) assertInvariants(result.session.postHandFeedback.completedHandState);
+  });
+
   it('Level 0 (Cấp 0 — Học lại): provides 2–3 minute lessons, Accate examples, Lecture/slide citations, and in-lesson feedback for all 7 concepts', () => {
     const lessons = getAllDrillLessons();
     expect(lessons).toHaveLength(DRILL_CONCEPT_IDS.length);
