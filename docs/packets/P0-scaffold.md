@@ -1,7 +1,7 @@
 # Packet P0 — Khung project, test runner, RNG có seed
 
 **Implementer:** Gemini 4 Hydrogen · **Reviewer:** GPT 6.2 Sol + Gemini 4 Neon · **Control:** Claude (session điều phối)
-**Thư mục làm việc:** `F:\CODE\Poke` (hiện đã có `docs/`, chưa phải git repo)
+**Thư mục làm việc:** `F:\CODE\Poke` · **Repo:** https://github.com/OXplakhoa/accate-trainer (nhánh `main` đã có `docs/`)
 
 ---
 
@@ -106,9 +106,8 @@ Viết cho mọi model làm các packet sau:
 Tạo thêm `CLAUDE.md` và `GEMINI.md` mỗi file chỉ một dòng: `See AGENTS.md`.
 
 ### 7. Git
-- `git init`, nhánh `main`. Commit đầu: chỉ thư mục `docs/` có sẵn.
-- Làm P0 trên nhánh `p0-scaffold`, commit theo từng bước hợp lý. **Không merge** vào `main` (control merge sau review).
-- `.gitignore`: `node_modules`, `dist`, `coverage`, `.env*`.
+- Repo đã có sẵn (`main` chứa `docs/`, `.gitignore`, `.gitattributes` với LF). Không tạo repo mới, không sửa hai file đó trừ khi cần thêm dòng vào `.gitignore`.
+- Tạo nhánh `p0-scaffold` từ `main`, commit theo từng bước hợp lý, push nhánh lên `origin`. **Không merge** vào `main`, không push lên `main` (control merge sau review).
 
 ### Không được
 - Cài luật poker, đánh giá tay bài, phát chip, UI bàn chơi — thuộc packet sau.
