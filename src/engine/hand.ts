@@ -138,12 +138,20 @@ function findFirstActiveFrom(
   return null;
 }
 
+function hasOtherActiveOpponent(
+  seats: readonly Pick<SeatState, 'playerId' | 'status'>[],
+  actorPlayerId: string,
+): boolean {
+  return seats.some((seat) => seat.status === 'active' && seat.playerId !== actorPlayerId);
+}
+
 function validateActionAgainstState(
   streetCap: number,
   currentBet: number,
   seat: Pick<SeatState, 'streetContribution'>,
   sourceChips: ChipCounts,
   action: BettingAction,
+  hasOtherActive: boolean,
 ): { readonly ok: true; readonly validated: ValidatedAction } | { readonly ok: false; readonly code: HandErrorCode; readonly message: string } {
   const availableValue = chipValue(sourceChips);
   const toCall = currentBet - seat.streetContribution;
@@ -186,6 +194,13 @@ function validateActionAgainstState(
           ok: false,
           code: 'cannot-bet-when-bet-exists',
           message: `Cannot bet when current bet is already ${currentBet}; use call or raise`,
+        };
+      }
+      if (!hasOtherActive) {
+        return {
+          ok: false,
+          code: 'cannot-bet-without-active-opponent',
+          message: 'Cannot bet when all remaining opponents are already all-in',
         };
       }
       if (
@@ -281,6 +296,13 @@ function validateActionAgainstState(
           ok: false,
           code: 'cap-reached',
           message: `Street cap of ${streetCap} has already been reached`,
+        };
+      }
+      if (!hasOtherActive) {
+        return {
+          ok: false,
+          code: 'cannot-raise-without-active-opponent',
+          message: 'Cannot raise when all remaining opponents are already all-in',
         };
       }
       if (
@@ -801,9 +823,14 @@ export function getLegalActions(state: HandState): LegalActions | null {
   const seat = state.seats[state.activePlayerIndex]!;
   const availableStack = chipValue(seat.stack);
   const toCall = state.currentBet - seat.streetContribution;
+  const hasOtherActive = hasOtherActiveOpponent(state.seats, seat.playerId);
 
   const canCheck = toCall === 0;
-  const canBet = state.currentBet === 0 && availableStack >= BET_STEP && state.streetCap >= BET_STEP;
+  const canBet =
+    hasOtherActive &&
+    state.currentBet === 0 &&
+    availableStack >= BET_STEP &&
+    state.streetCap >= BET_STEP;
   const maxBet = Math.min(state.streetCap, availableStack);
   const betRange = canBet ? ({ min: BET_STEP, max: maxBet, step: BET_STEP } as const) : null;
 
@@ -814,7 +841,10 @@ export function getLegalActions(state: HandState): LegalActions | null {
   const minRaiseTo = state.currentBet + BET_STEP;
   const maxRaiseTo = Math.min(state.streetCap, seat.streetContribution + availableStack);
   const canRaise =
-    state.currentBet > 0 && state.currentBet < state.streetCap && maxRaiseTo >= minRaiseTo;
+    hasOtherActive &&
+    state.currentBet > 0 &&
+    state.currentBet < state.streetCap &&
+    maxRaiseTo >= minRaiseTo;
   const raiseRange = canRaise ? ({ min: minRaiseTo, max: maxRaiseTo, step: BET_STEP } as const) : null;
 
   return {
@@ -911,6 +941,7 @@ export function declareOutOfTurn(
     seat,
     seat.stack,
     action,
+    hasOtherActiveOpponent(state.seats, seat.playerId),
   );
   if (!check.ok) {
     return {
@@ -1032,6 +1063,7 @@ export function applyAction(
     activeSeat,
     activeSeat.stack,
     action,
+    hasOtherActiveOpponent(state.seats, activeSeat.playerId),
   );
   if (!initialCheck.ok) {
     return {
@@ -1202,10 +1234,16 @@ export function applyAction(
     }
 
     // Check whether the current betting street closes.
+    // When <= 1 active player remains (all other non-folded opponents are all-in), the street
+    // closes as soon as any remaining active player has matched `currentBet`, without requiring
+    // them to check or bet even if they have not acted on this street yet (§3.2, R9).
     const activeSeats = seats.filter((s) => s.status === 'active');
-    const streetClosed = activeSeats.every(
-      (s) => s.hasActedThisStreet && s.streetContribution === currentBet,
-    );
+    const streetClosed =
+      activeSeats.length <= 1
+        ? activeSeats.every((s) => s.streetContribution === currentBet)
+        : activeSeats.every(
+            (s) => s.hasActedThisStreet && s.streetContribution === currentBet,
+          );
 
     if (!streetClosed) {
       const nextIdx = findNextActiveIndex(
@@ -1215,24 +1253,28 @@ export function applyAction(
       )!;
       const nextSeat = seats[nextIdx]!;
 
-      if (nextSeat.declaration !== null && nextSeat.declaration.declaredAtCurrentBet === currentBet) {
+      if (nextSeat.declaration !== null) {
         const decl = nextSeat.declaration;
-        const declCheck = validateActionAgainstState(
-          streetCap,
-          currentBet,
-          nextSeat,
-          decl.reservedChips,
-          decl.action,
-        );
-        if (declCheck.ok) {
-          autoExecutedDeclarations.push(decl);
-          currentActorIdx = nextIdx;
-          currentAction = decl.action;
-          currentValidated = declCheck.validated;
-          fromOutOfTurn = true;
-          continue;
+        if (decl.declaredAtCurrentBet === currentBet) {
+          const declCheck = validateActionAgainstState(
+            streetCap,
+            currentBet,
+            nextSeat,
+            decl.reservedChips,
+            decl.action,
+            hasOtherActiveOpponent(seats, nextSeat.playerId),
+          );
+          if (declCheck.ok) {
+            autoExecutedDeclarations.push(decl);
+            currentActorIdx = nextIdx;
+            currentAction = decl.action;
+            currentValidated = declCheck.validated;
+            fromOutOfTurn = true;
+            continue;
+          }
         }
-        // Defensive fallback if reserved chips ever failed validation: cancel and return chips.
+        // Cancel declaration if it is no longer legal at turn time (e.g. all other opponents
+        // are now all-in) and return reserved chips to the player's stack.
         nextSeat.stack = addChips(nextSeat.stack, decl.reservedChips);
         nextSeat.declaration = null;
         nextSeat.cancelledDeclarationThisStreet = true;
@@ -1242,7 +1284,9 @@ export function applyAction(
           street,
           playerId: nextSeat.playerId,
           action: decl.action,
-          reason: 'bet-changed',
+          reason:
+            decl.declaredAtCurrentBet === currentBet ? 'action-no-longer-legal' : 'bet-changed',
+          triggeredByPlayerId: seat.playerId,
           returnedChips: decl.reservedChips,
         });
       }

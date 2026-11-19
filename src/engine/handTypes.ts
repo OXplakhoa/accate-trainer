@@ -119,7 +119,11 @@ export interface HandExchangeRequest {
   readonly receive: ChipCounts;
 }
 
-export type OutOfTurnCancelReason = 'bet-changed' | 'street-ended' | 'hand-ended';
+export type OutOfTurnCancelReason =
+  | 'bet-changed'
+  | 'action-no-longer-legal'
+  | 'street-ended'
+  | 'hand-ended';
 
 export type HandTimelineEvent =
   | {
@@ -264,8 +268,10 @@ export type HandErrorCode =
   | 'no-upcoming-turn'
   | 'cannot-check-facing-bet'
   | 'cannot-bet-when-bet-exists'
+  | 'cannot-bet-without-active-opponent'
   | 'cannot-call-without-bet'
   | 'cannot-raise-without-bet'
+  | 'cannot-raise-without-active-opponent'
   | 'cap-reached'
   | 'invalid-amount'
   | 'chips-mismatch-amount'

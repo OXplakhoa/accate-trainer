@@ -9,6 +9,7 @@ import {
   buildFixtureDeck,
   callAction,
   mustApply,
+  mustDeclare,
   mustExchange,
   mustRejectAction,
   mustStartHand,
@@ -280,6 +281,384 @@ describe('hand betting rules (R1-R16, C2, C3, exchanges, uncalled refund)', () =
     expect(state2.board).toHaveLength(5);
     expect(state2.outcome?.kind).toBe('showdown');
     expect(stackValueOf(state2, 'A')).toBe(80); // 20 ante + 30 + 30
+  });
+
+  it('R9-fix1: goes straight to runout and showdown when sole active player matches currentBet without acting (A all-in on ante 5, opener B, B and C fold)', () => {
+    const init = initialDistribution(4);
+    const aStack: ChipCounts = { 5: 1, 10: 0, 50: 0, 100: 0 }; // 5 -> all-in on ante
+    const bank = addChips(init.bank, subtractChips(init.perPlayer, aStack));
+    const deck = buildFixtureDeck({
+      playerIds: ['A', 'B', 'C', 'D'],
+      dealerIndex: 3,
+      holeCardsByPlayer: { A: 'As Ah', B: '7c 2d', C: '8c 3d', D: 'Ks Kh' },
+      board: '2c 4h 9s Jd Qc',
+    });
+
+    let state = mustStartHand({
+      seats: [
+        { playerId: 'A', stack: aStack },
+        { playerId: 'B', stack: init.perPlayer },
+        { playerId: 'C', stack: init.perPlayer },
+        { playerId: 'D', stack: init.perPlayer },
+      ],
+      bank,
+      rng: createRng('R9-ante-allin-runout'),
+      config: { dealerIndex: 3 },
+      fixtures: { deck, openerId: 'B' },
+    }).state;
+
+    expect(seatOf(state, 'A').status).toBe('all-in');
+    expect(state.phase).toBe('betting');
+    expect(state.activePlayerId).toBe('B');
+    expect(state.board).toHaveLength(3);
+
+    state = mustApply(state, 'B', { type: 'fold' }).state;
+    expect(state.phase).toBe('betting');
+    expect(state.activePlayerId).toBe('C');
+
+    // After C folds, only A (all-in) and D (active, never acted, facing 0) remain -> immediate runout & showdown
+    const afterC = mustApply(state, 'C', { type: 'fold' });
+    state = afterC.state;
+
+    expect(afterC.decisionRequiredFor).toBeNull();
+    expect(state.phase).toBe('complete');
+    expect(state.activePlayerId).toBeNull();
+    expect(getLegalActions(state)).toBeNull();
+    expect(state.board).toHaveLength(5);
+    expect(seatOf(state, 'D').hasActedThisStreet).toBe(false);
+    expect(state.outcome?.kind).toBe('showdown');
+    if (state.outcome?.kind !== 'showdown') {
+      throw new Error('Expected showdown outcome');
+    }
+    expect(state.outcome.resolution.potAwards).toHaveLength(1);
+    expect(state.outcome.resolution.potAwards[0]!.potAmount).toBe(20);
+    expect(state.outcome.resolution.potAwards[0]!.eligiblePlayerIds).toEqual(['A', 'D']);
+    expect(state.outcome.resolution.potAwards[0]!.awards).toEqual([{ playerId: 'A', amount: 20 }]);
+    expect(stackValueOf(state, 'A')).toBe(20);
+    expect(stackValueOf(state, 'D')).toBe(495);
+    expect(chipValue(state.pot)).toBe(0);
+
+    // Same scenario when D had declared an out-of-turn bet 20: reserved chips return cleanly before runout
+    let ootState = mustStartHand({
+      seats: [
+        { playerId: 'A', stack: aStack },
+        { playerId: 'B', stack: init.perPlayer },
+        { playerId: 'C', stack: init.perPlayer },
+        { playerId: 'D', stack: init.perPlayer },
+      ],
+      bank,
+      rng: createRng('R9-ante-allin-runout-oot'),
+      config: { dealerIndex: 3, allowOutOfTurn: true },
+      fixtures: { deck, openerId: 'B' },
+    }).state;
+
+    const bet20Chips: ChipCounts = { 5: 0, 10: 2, 50: 0, 100: 0 };
+    const dStackBeforeDeclare = seatOf(ootState, 'D').stack;
+    ootState = mustDeclare(ootState, 'D', { type: 'bet', amount: 20, chips: bet20Chips }).state;
+    expect(stackValueOf(ootState, 'D')).toBe(475);
+
+    ootState = mustApply(ootState, 'B', { type: 'fold' }).state;
+    const afterCOot = mustApply(ootState, 'C', { type: 'fold' });
+    ootState = afterCOot.state;
+
+    expect(afterCOot.decisionRequiredFor).toBeNull();
+    expect(afterCOot.autoExecutedDeclarations).toHaveLength(0);
+    expect(afterCOot.cancelledDeclarations).toHaveLength(1);
+    expect(afterCOot.cancelledDeclarations[0]!.playerId).toBe('D');
+    expect(seatOf(ootState, 'D').declaration).toBeNull();
+    expect(seatOf(ootState, 'D').stack).toEqual(dStackBeforeDeclare);
+    expect(ootState.phase).toBe('complete');
+    expect(ootState.board).toHaveLength(5);
+    expect(ootState.outcome?.kind).toBe('showdown');
+    expect(stackValueOf(ootState, 'A')).toBe(20);
+    expect(stackValueOf(ootState, 'D')).toBe(495);
+  });
+
+  it('R9-fix1: goes straight to runout and showdown when zero active players remain', () => {
+    const init = initialDistribution(4);
+    const stack35: ChipCounts = { 5: 1, 10: 3, 50: 0, 100: 0 }; // 35 -> 30 after ante
+    const deck = buildFixtureDeck({
+      playerIds: ['A', 'B', 'C', 'D'],
+      dealerIndex: 3,
+      holeCardsByPlayer: { A: 'As Ah', B: 'Ks Kh', C: '7c 2d', D: '8c 3d' },
+      board: '2c 4h 9s Jd Qc',
+    });
+
+    // Case 1: Both remaining players go all-in on flop (A bets 30 all-in, B calls 30 all-in) -> 0 active players
+    const bank1 = addChips(
+      init.bank,
+      addChips(subtractChips(init.perPlayer, stack35), subtractChips(init.perPlayer, stack35)),
+    );
+    let state1 = mustStartHand({
+      seats: [
+        { playerId: 'A', stack: stack35 },
+        { playerId: 'B', stack: stack35 },
+        { playerId: 'C', stack: init.perPlayer },
+        { playerId: 'D', stack: init.perPlayer },
+      ],
+      bank: bank1,
+      rng: createRng('R9-zero-active-call'),
+      config: { dealerIndex: 3 },
+      fixtures: { deck, openerId: 'C' },
+    }).state;
+
+    state1 = mustApply(state1, 'C', { type: 'fold' }).state;
+    state1 = mustApply(state1, 'D', { type: 'fold' }).state;
+    state1 = mustApply(state1, 'A', betAction(state1, 'A', 30)).state;
+
+    const legalB = getLegalActions(state1)!;
+    expect(legalB.canCall).toBe(true);
+    expect(legalB.callAmount).toBe(30);
+    expect(legalB.isCallAllIn).toBe(true);
+    expect(legalB.canFold).toBe(true);
+    expect(legalB.canRaise).toBe(false);
+
+    const afterCall = mustApply(state1, 'B', callAction(state1, 'B'));
+    state1 = afterCall.state;
+    expect(afterCall.decisionRequiredFor).toBeNull();
+    expect(state1.seats.filter((s) => s.status === 'active')).toHaveLength(0);
+    expect(state1.phase).toBe('complete');
+    expect(state1.board).toHaveLength(5);
+    expect(state1.outcome?.kind).toBe('showdown');
+    expect(stackValueOf(state1, 'A')).toBe(80);
+    expect(stackValueOf(state1, 'B')).toBe(0);
+
+    // Case 2: A all-in on ante 5, B bets 30 all-in, C & D fold -> 0 active players, uncalled 30 refunded to B, showdown A vs B
+    const stack5: ChipCounts = { 5: 1, 10: 0, 50: 0, 100: 0 };
+    const bank2 = addChips(
+      init.bank,
+      addChips(subtractChips(init.perPlayer, stack5), subtractChips(init.perPlayer, stack35)),
+    );
+    let state2 = mustStartHand({
+      seats: [
+        { playerId: 'A', stack: stack5 },
+        { playerId: 'B', stack: stack35 },
+        { playerId: 'C', stack: init.perPlayer },
+        { playerId: 'D', stack: init.perPlayer },
+      ],
+      bank: bank2,
+      rng: createRng('R9-zero-active-uncalled'),
+      config: { dealerIndex: 3 },
+      fixtures: { deck, openerId: 'B' },
+    }).state;
+
+    state2 = mustApply(state2, 'B', betAction(state2, 'B', 30)).state;
+    state2 = mustApply(state2, 'C', { type: 'fold' }).state;
+    const afterD = mustApply(state2, 'D', { type: 'fold' });
+    state2 = afterD.state;
+
+    expect(afterD.decisionRequiredFor).toBeNull();
+    expect(state2.seats.filter((s) => s.status === 'active')).toHaveLength(0);
+    expect(state2.phase).toBe('complete');
+    expect(state2.board).toHaveLength(5);
+    expect(state2.outcome?.kind).toBe('showdown');
+    expect(stackValueOf(state2, 'A')).toBe(20); // wins 20 ante pot
+    expect(stackValueOf(state2, 'B')).toBe(30); // uncalled 30 refunded
+  });
+
+  it('R9-fix1: sole active player facing all-in bet can call or fold, cannot raise to 40, and call runs out to showdown', () => {
+    const init = initialDistribution(4);
+    const aStack: ChipCounts = { 5: 1, 10: 3, 50: 0, 100: 0 }; // 35 -> 30 after ante
+    const bank = addChips(init.bank, subtractChips(init.perPlayer, aStack));
+    const deck = buildFixtureDeck({
+      playerIds: ['A', 'B', 'C', 'D'],
+      dealerIndex: 3,
+      holeCardsByPlayer: { A: 'As Ah', B: 'Ks Kh', C: '7c 2d', D: '8c 3d' },
+      board: '2c 4h 9s Jd Qc',
+    });
+
+    let state = mustStartHand({
+      seats: [
+        { playerId: 'A', stack: aStack },
+        { playerId: 'B', stack: init.perPlayer },
+        { playerId: 'C', stack: init.perPlayer },
+        { playerId: 'D', stack: init.perPlayer },
+      ],
+      bank,
+      rng: createRng('R9-no-raise-allin'),
+      config: { dealerIndex: 3 },
+      fixtures: { deck, openerId: 'C' },
+    }).state;
+
+    state = mustApply(state, 'C', { type: 'fold' }).state;
+    state = mustApply(state, 'D', { type: 'fold' }).state;
+    state = mustApply(state, 'A', betAction(state, 'A', 30)).state;
+
+    expect(seatOf(state, 'A').status).toBe('all-in');
+    expect(state.phase).toBe('betting');
+    expect(state.activePlayerId).toBe('B');
+    expect(state.board).toHaveLength(3);
+
+    const legalB = getLegalActions(state)!;
+    expect(legalB.playerId).toBe('B');
+    expect(legalB.canCall).toBe(true);
+    expect(legalB.callAmount).toBe(30);
+    expect(legalB.isCallAllIn).toBe(false);
+    expect(legalB.canFold).toBe(true);
+    expect(legalB.canCheck).toBe(false);
+    expect(legalB.canBet).toBe(false);
+    expect(legalB.betRange).toBeNull();
+    expect(legalB.canRaise).toBe(false);
+    expect(legalB.raiseRange).toBeNull();
+
+    // Raising to 40 against an all-in opponent is rejected without mutating state (INV-1 & INV-2 checked)
+    mustRejectAction(
+      state,
+      'B',
+      raiseAction(state, 'B', 40),
+      'cannot-raise-without-active-opponent',
+    );
+    expect(state.activePlayerId).toBe('B');
+    expect(state.currentBet).toBe(30);
+    expect(stackValueOf(state, 'B')).toBe(495);
+
+    // Folding is still legal and ends immediately without runout
+    const folded = mustApply(state, 'B', { type: 'fold' }).state;
+    expect(folded.phase).toBe('complete');
+    expect(folded.board).toHaveLength(3);
+    expect(folded.outcome).toEqual({
+      kind: 'fold-win',
+      winnerId: 'A',
+      potAmount: 50,
+      revealedCards: false,
+    });
+    expect(stackValueOf(folded, 'A')).toBe(50);
+
+    // Calling 30 goes straight to runout and showdown
+    const called = mustApply(state, 'B', callAction(state, 'B'));
+    expect(called.decisionRequiredFor).toBeNull();
+    expect(called.state.phase).toBe('complete');
+    expect(called.state.board).toHaveLength(5);
+    expect(called.state.outcome?.kind).toBe('showdown');
+    expect(stackValueOf(called.state, 'A')).toBe(80);
+    expect(stackValueOf(called.state, 'B')).toBe(465);
+  });
+
+  it('R9-fix1: cancels declared raise and returns reserved chips when all other opponents fold or go all-in before actor turn', () => {
+    const init = initialDistribution(4);
+    const stack35: ChipCounts = { 5: 1, 10: 3, 50: 0, 100: 0 }; // 35 -> 30 after ante
+    const deck = buildFixtureDeck({
+      playerIds: ['A', 'B', 'C', 'D'],
+      dealerIndex: 3,
+      holeCardsByPlayer: { A: 'As Ah', B: '7c 2d', C: 'Qc Qd', D: 'Ks Kh' },
+      board: '2c 4h 9s Jd 5c',
+    });
+
+    // Subcase A: D declares raise to 40 while B and C are active; B and C both fold -> D's raise is cancelled, 40 returned
+    const bankA = addChips(init.bank, subtractChips(init.perPlayer, stack35));
+    let stateA = mustStartHand({
+      seats: [
+        { playerId: 'A', stack: stack35 },
+        { playerId: 'B', stack: init.perPlayer },
+        { playerId: 'C', stack: init.perPlayer },
+        { playerId: 'D', stack: init.perPlayer },
+      ],
+      bank: bankA,
+      rng: createRng('R9-oot-raise-cancel-fold'),
+      config: { dealerIndex: 3, allowOutOfTurn: true },
+      fixtures: { deck, openerId: 'A' },
+    }).state;
+
+    stateA = mustApply(stateA, 'A', betAction(stateA, 'A', 30)).state;
+    const dStackBeforeDeclare = seatOf(stateA, 'D').stack;
+    const raise40Chips: ChipCounts = { 5: 0, 10: 4, 50: 0, 100: 0 };
+
+    stateA = mustDeclare(stateA, 'D', { type: 'raise', raiseTo: 40, chips: raise40Chips }).state;
+    expect(seatOf(stateA, 'D').declaration?.reservedChips).toEqual(raise40Chips);
+    expect(stackValueOf(stateA, 'D')).toBe(455);
+
+    stateA = mustApply(stateA, 'B', { type: 'fold' }).state;
+    expect(seatOf(stateA, 'D').declaration).not.toBeNull();
+
+    const afterC = mustApply(stateA, 'C', { type: 'fold' });
+    stateA = afterC.state;
+
+    expect(afterC.autoExecutedDeclarations).toHaveLength(0);
+    expect(afterC.cancelledDeclarations).toHaveLength(1);
+    expect(afterC.cancelledDeclarations[0]!.playerId).toBe('D');
+    expect(afterC.decisionRequiredFor).toBe('D');
+    expect(stateA.phase).toBe('betting');
+    expect(stateA.activePlayerId).toBe('D');
+    expect(stateA.awaitingDecision).toEqual({
+      playerId: 'D',
+      street: 'flop',
+      hadCancelledDeclaration: true,
+    });
+    expect(seatOf(stateA, 'D').declaration).toBeNull();
+    expect(seatOf(stateA, 'D').stack).toEqual(dStackBeforeDeclare);
+    expect(stackValueOf(stateA, 'D')).toBe(495);
+
+    const cancelEvent = afterC.events.find((e) => e.type === 'out-of-turn-cancelled');
+    expect(cancelEvent).toEqual({
+      type: 'out-of-turn-cancelled',
+      street: 'flop',
+      playerId: 'D',
+      action: { type: 'raise', raiseTo: 40, chips: raise40Chips },
+      reason: 'action-no-longer-legal',
+      triggeredByPlayerId: 'C',
+      returnedChips: raise40Chips,
+    });
+
+    const legalD = getLegalActions(stateA)!;
+    expect(legalD.canCall).toBe(true);
+    expect(legalD.callAmount).toBe(30);
+    expect(legalD.canFold).toBe(true);
+    expect(legalD.canRaise).toBe(false);
+    expect(legalD.raiseRange).toBeNull();
+
+    mustRejectAction(
+      stateA,
+      'D',
+      raiseAction(stateA, 'D', 40),
+      'cannot-raise-without-active-opponent',
+    );
+
+    stateA = mustApply(stateA, 'D', callAction(stateA, 'D')).state;
+    expect(stateA.phase).toBe('complete');
+    expect(stateA.board).toHaveLength(5);
+    expect(stateA.outcome?.kind).toBe('showdown');
+    expect(stackValueOf(stateA, 'A')).toBe(80);
+    expect(stackValueOf(stateA, 'D')).toBe(465);
+
+    // Subcase B: C auto-executes all-in call 30 after B folds -> A and C both all-in -> D's declared raise 40 cancelled & chips returned
+    const bankB = addChips(
+      init.bank,
+      addChips(subtractChips(init.perPlayer, stack35), subtractChips(init.perPlayer, stack35)),
+    );
+    let stateB = mustStartHand({
+      seats: [
+        { playerId: 'A', stack: stack35 },
+        { playerId: 'B', stack: init.perPlayer },
+        { playerId: 'C', stack: stack35 },
+        { playerId: 'D', stack: init.perPlayer },
+      ],
+      bank: bankB,
+      rng: createRng('R9-oot-raise-cancel-allin'),
+      config: { dealerIndex: 3, allowOutOfTurn: true },
+      fixtures: { deck, openerId: 'A' },
+    }).state;
+
+    stateB = mustApply(stateB, 'A', betAction(stateB, 'A', 30)).state;
+    const dStackB = seatOf(stateB, 'D').stack;
+    stateB = mustDeclare(stateB, 'C', { type: 'call', chips: { 5: 0, 10: 3, 50: 0, 100: 0 } }).state;
+    stateB = mustDeclare(stateB, 'D', { type: 'raise', raiseTo: 40, chips: raise40Chips }).state;
+
+    const afterB = mustApply(stateB, 'B', { type: 'fold' });
+    stateB = afterB.state;
+
+    expect(afterB.autoExecutedDeclarations.map((d) => d.playerId)).toEqual(['C']);
+    expect(afterB.cancelledDeclarations.map((d) => d.playerId)).toEqual(['D']);
+    expect(seatOf(stateB, 'C').status).toBe('all-in');
+    expect(seatOf(stateB, 'D').declaration).toBeNull();
+    expect(seatOf(stateB, 'D').stack).toEqual(dStackB);
+    expect(stateB.activePlayerId).toBe('D');
+    expect(getLegalActions(stateB)!.canRaise).toBe(false);
+
+    stateB = mustApply(stateB, 'D', callAction(stateB, 'D')).state;
+    expect(stateB.phase).toBe('complete');
+    expect(stateB.board).toHaveLength(5);
+    expect(stateB.outcome?.kind).toBe('showdown');
+    expect(stackValueOf(stateB, 'A')).toBe(110); // 20 ante + 30*3
   });
 
   it('R10: allows unlimited raises by steps of 5 up to 50, then restricts to call/fold', () => {
