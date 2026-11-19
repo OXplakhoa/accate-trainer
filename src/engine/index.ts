@@ -12,3 +12,5 @@ export * from './pots';
 export * from './showdown';
 export * from './tableBoundary';
 export * from './calculator';
+export * from './rivals';
+export type { WeightedCombo } from './calculator';
