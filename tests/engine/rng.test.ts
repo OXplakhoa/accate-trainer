@@ -133,4 +133,55 @@ describe('createRng', () => {
     expect(() => createRng(Number.POSITIVE_INFINITY)).toThrow();
     expect(() => createRng(Number.NEGATIVE_INFINITY)).toThrow();
   });
+
+  it('exercises rejection sampling in int(2 ** 31 + 1) for seed "p0-review"', () => {
+    const rng = createRng('p0-review');
+    // Golden value for seed "p0-review": on the 3rd call to int(2**31 + 1),
+    // sfc32 produces a sample >= limit (= 2**31 + 1), so rejection sampling discards
+    // it and draws the next sample, returning 334994198 (naive modulo returns 1187297695).
+    rng.int(2 ** 31 + 1);
+    rng.int(2 ** 31 + 1);
+    expect(rng.int(2 ** 31 + 1)).toBe(334994198);
+  });
+
+  it('produces uniform direct int(3) and int(7) distributions (<= 5% deviation with >= 60,000 samples)', () => {
+    const rng = createRng('direct-int-distribution');
+
+    for (const [buckets, trials] of [
+      [3, 60_000],
+      [7, 63_000],
+    ] as const) {
+      const counts = Array.from({ length: buckets }, () => 0);
+      for (let i = 0; i < trials; i++) {
+        const val = rng.int(buckets);
+        counts[val] = (counts[val] ?? 0) + 1;
+      }
+
+      const expected = trials / buckets;
+      for (const count of counts) {
+        const relativeError = Math.abs(count - expected) / expected;
+        expect(relativeError).toBeLessThanOrEqual(0.05);
+      }
+    }
+  });
+
+  it('accepts int(2 ** 32), rejects int(2 ** 32 + 1), handles empty/singleton shuffle, and freezes Rng', () => {
+    const rng = createRng('rng-boundaries');
+    expect(Object.isFrozen(rng)).toBe(true);
+
+    for (let i = 0; i < 100; i++) {
+      const val = rng.int(2 ** 32);
+      expect(Number.isInteger(val)).toBe(true);
+      expect(val).toBeGreaterThanOrEqual(0);
+      expect(val).toBeLessThan(2 ** 32);
+    }
+    expect(() => rng.int(2 ** 32 + 1)).toThrow(RangeError);
+
+    const empty: number[] = [];
+    const single = [1];
+    expect(rng.shuffle(empty)).toEqual([]);
+    expect(rng.shuffle(empty)).not.toBe(empty);
+    expect(rng.shuffle(single)).toEqual([1]);
+    expect(rng.shuffle(single)).not.toBe(single);
+  });
 });

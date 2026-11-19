@@ -8,7 +8,10 @@ const WARMUP_ROUNDS = 15;
 export interface Rng {
   /** Float in [0, 1). */
   next(): number;
-  /** Unbiased integer in [0, maxExclusive) using rejection sampling. */
+  /**
+   * Unbiased integer in `[0, maxExclusive)` using rejection sampling.
+   * Domain: `maxExclusive` must be an integer with `1 <= maxExclusive <= 2**32`.
+   */
   int(maxExclusive: number): number;
   /** Picks one element uniformly at random from a non-empty array. */
   pick<T>(items: readonly T[]): T;
@@ -126,12 +129,12 @@ export function createRng(seed: string | number): Rng {
     return createRng(`${normalizedSeed.length}:${normalizedSeed}:${label}`);
   };
 
-  return {
+  return Object.freeze({
     next,
     int,
     pick,
     shuffle,
     fork,
     seed: normalizedSeed,
-  };
+  });
 }
