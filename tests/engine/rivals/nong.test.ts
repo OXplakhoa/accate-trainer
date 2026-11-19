@@ -417,4 +417,115 @@ describe('P2b rivals — Nóng tilt triggers, public state, and 3–5 hand count
     expect(afterFirstTiltedHand.handsRemaining).toBe(drawnDuration - 1);
     expect(afterFirstTiltedHand.totalTiltDuration).toBe(drawnDuration);
   });
+
+  it('treats prototype property names (__proto__, constructor, toString) as ordinary player IDs in full-engine showdown summaries while preserving public-card isolation and chip invariants', () => {
+    const init = initialDistribution(4);
+
+    // 1. Exact reproduction: 4-player full-engine showdown with ['nong', '__proto__', 'cao', 'soi'],
+    // createRng('control-player-id'), dealerIndex 3, and checks until complete.
+    const controlSeatIds = ['nong', '__proto__', 'cao', 'soi'] as const;
+    let controlHand = mustStartHand({
+      seats: controlSeatIds.map((playerId) => ({ playerId, stack: init.perPlayer })),
+      bank: init.bank,
+      rng: createRng('control-player-id'),
+      config: { dealerIndex: 3 },
+    }).state;
+
+    while (controlHand.phase === 'betting' && controlHand.activePlayerId !== null) {
+      controlHand = mustApply(controlHand, controlHand.activePlayerId, { type: 'check' }).state;
+    }
+
+    expect(controlHand.phase).toBe('complete');
+    assertHandInvariants(controlHand);
+
+    const controlSummary = summarizeCompletedHandForRivals(controlHand);
+    expect(validatePublicHandResultSummary(controlSummary)).toEqual({ ok: true });
+    expect(Object.getPrototypeOf(controlSummary.revealedShowdownCards)).toBeNull();
+    expect(
+      Object.prototype.hasOwnProperty.call(controlSummary.revealedShowdownCards, '__proto__'),
+    ).toBe(true);
+    expect(Object.keys(controlSummary.revealedShowdownCards).sort()).toEqual([
+      '__proto__',
+      'cao',
+      'nong',
+      'soi',
+    ]);
+
+    const protoSeat = controlHand.seats.find((s) => s.playerId === '__proto__')!;
+    expect(controlSummary.revealedShowdownCards['__proto__']).toEqual(protoSeat.holeCards);
+    expect(() => evaluateNongTiltTrigger(controlSummary)).not.toThrow();
+
+    // 2. Full-engine showdown with prototype-named seats where '__proto__' rivers a turn bad beat
+    // against 'nong' in a 100-point pot while 'constructor' and 'toString' fold on the flop.
+    const protoBattleIds = ['nong', '__proto__', 'constructor', 'toString'] as const;
+    const holeCardsByPlayer = Object.create(null) as Record<string, string>;
+    holeCardsByPlayer['nong'] = 'As 9s';
+    holeCardsByPlayer['__proto__'] = 'Ac Kc';
+    holeCardsByPlayer['constructor'] = '4h 4c';
+    holeCardsByPlayer['toString'] = '2h 7c';
+
+    const deck = buildFixtureDeck({
+      playerIds: protoBattleIds,
+      dealerIndex: 3,
+      holeCardsByPlayer,
+      board: 'Ah 9c 4d 2s Kh',
+    });
+
+    let battleHand = mustStartHand({
+      seats: protoBattleIds.map((playerId) => ({ playerId, stack: init.perPlayer })),
+      bank: init.bank,
+      rng: createRng('proto-bad-beat-hand'),
+      config: { dealerIndex: 3 },
+      fixtures: { deck, openerId: 'nong' },
+    }).state;
+
+    // Flop: nong bets 20, __proto__ calls, constructor and toString fold
+    battleHand = mustApply(battleHand, 'nong', betAction(battleHand, 'nong', 20)).state;
+    battleHand = mustApply(battleHand, '__proto__', callAction(battleHand, '__proto__')).state;
+    battleHand = mustApply(battleHand, 'constructor', { type: 'fold' }).state;
+    battleHand = mustApply(battleHand, 'toString', { type: 'fold' }).state;
+
+    // Turn: nong bets 10, __proto__ calls
+    battleHand = mustApply(battleHand, 'nong', betAction(battleHand, 'nong', 10)).state;
+    battleHand = mustApply(battleHand, '__proto__', callAction(battleHand, '__proto__')).state;
+
+    // River: nong bets 10, __proto__ calls -> 100-point pot at showdown
+    battleHand = mustApply(battleHand, 'nong', betAction(battleHand, 'nong', 10)).state;
+    battleHand = mustApply(battleHand, '__proto__', callAction(battleHand, '__proto__')).state;
+
+    expect(battleHand.phase).toBe('complete');
+    assertHandInvariants(battleHand);
+
+    const battleSummary = summarizeCompletedHandForRivals(battleHand);
+    expect(validatePublicHandResultSummary(battleSummary)).toEqual({ ok: true });
+    expect(Object.keys(battleSummary.revealedShowdownCards).sort()).toEqual(['__proto__', 'nong']);
+    // Public-card isolation: folded 'constructor' and 'toString' must not be present or inherited
+    expect(
+      Object.prototype.hasOwnProperty.call(battleSummary.revealedShowdownCards, 'constructor'),
+    ).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(battleSummary.revealedShowdownCards, 'toString'),
+    ).toBe(false);
+    expect(battleSummary.revealedShowdownCards['constructor']).toBeUndefined();
+    expect(battleSummary.revealedShowdownCards['toString']).toBeUndefined();
+
+    expect(evaluateNongTiltTrigger(battleSummary)).toEqual({
+      triggered: true,
+      reason: 'turn-bad-beat',
+      triggeringPotIndex: 0,
+      triggeringPotAmount: 100,
+    });
+
+    // Own-key lookup on a caller-supplied plain `{}` summary must not treat inherited Object.prototype
+    // properties as revealed hole cards when a prototype-named seat folded.
+    const plainObjectSummary: PublicHandResultSummary = {
+      ...battleSummary,
+      revealedShowdownCards: {
+        nong: battleSummary.revealedShowdownCards['nong']!,
+      },
+    };
+    expect(evaluateNongTiltTrigger(plainObjectSummary, 'constructor').triggered).toBe(false);
+    expect(evaluateNongTiltTrigger(plainObjectSummary, '__proto__').triggered).toBe(false);
+    expect(evaluateNongTiltTrigger(plainObjectSummary, 'nong').triggered).toBe(false);
+  });
 });

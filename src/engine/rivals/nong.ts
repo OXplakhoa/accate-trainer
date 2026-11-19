@@ -40,6 +40,15 @@ function isValidCard(card: unknown): card is Card {
   );
 }
 
+function getOwnRevealedCards(
+  revealed: Readonly<Record<string, readonly [Card, Card]>>,
+  playerId: string,
+): readonly [Card, Card] | undefined {
+  return Object.prototype.hasOwnProperty.call(revealed, playerId)
+    ? revealed[playerId]
+    : undefined;
+}
+
 /**
  * Creates the initial non-tilted state for Nóng (spec §4.1.1, D45).
  */
@@ -73,11 +82,12 @@ export function summarizeCompletedHandForRivals(handState: HandState): PublicHan
   const board = Object.freeze(handState.board.map(cloneCard));
 
   if (handState.outcome.kind === 'fold-win') {
+    const emptyRevealed = Object.create(null) as Record<string, readonly [Card, Card]>;
     return Object.freeze({
       seatedPlayerIds,
       outcomeKind: 'fold-win',
       board,
-      revealedShowdownCards: Object.freeze({}),
+      revealedShowdownCards: Object.freeze(emptyRevealed),
       potAwards: Object.freeze([]),
     });
   }
@@ -99,7 +109,7 @@ export function summarizeCompletedHandForRivals(handState: HandState): PublicHan
     });
   });
 
-  const revealedShowdownCards: Record<string, readonly [Card, Card]> = {};
+  const revealedShowdownCards = Object.create(null) as Record<string, readonly [Card, Card]>;
   for (const seat of handState.seats) {
     if (seat.status !== 'folded' && eligibleAtShowdown.has(seat.playerId)) {
       revealedShowdownCards[seat.playerId] = Object.freeze([
@@ -268,7 +278,7 @@ export function evaluateNongTiltTrigger(
     return noTrigger;
   }
 
-  const nongHoleCards = summary.revealedShowdownCards[nongPlayerId];
+  const nongHoleCards = getOwnRevealedCards(summary.revealedShowdownCards, nongPlayerId);
   if (nongHoleCards === undefined) {
     // Nóng folded before showdown and was not eligible for any showdown pot
     return noTrigger;
@@ -314,7 +324,7 @@ export function evaluateNongTiltTrigger(
       if (otherId === nongPlayerId) {
         continue;
       }
-      const otherHoleCards = summary.revealedShowdownCards[otherId];
+      const otherHoleCards = getOwnRevealedCards(summary.revealedShowdownCards, otherId);
       if (otherHoleCards === undefined) {
         strictlyAheadOfAll = false;
         break;
