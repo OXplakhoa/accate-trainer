@@ -166,10 +166,13 @@ export interface HeroActionValidation {
   readonly validationHintVi: string | null;
 }
 
+export type DealAnimationEndOutcome = 'completed' | 'superseded';
+
 export interface DealAnimationEndInfo {
   readonly handNumber: number;
   readonly street: Street;
   readonly eventCount: number;
+  readonly outcome: DealAnimationEndOutcome;
 }
 
 export interface HeroTurnChangeInfo {
@@ -195,7 +198,11 @@ export interface SandboxAppProps {
   readonly mode?: 'sandbox' | 'tournament';
   /** Dedicated visible slot in the action area for P5 Tournament countdown timer. */
   readonly timerSlot?: ReactNode;
-  /** Observable callback fired when deal/reveal animation finishes (O3 readiness). */
+  /**
+   * Observable callback fired once per deal/reveal animation lifecycle (O3 readiness).
+   * Consumers must only start the turn clock when `info.outcome === 'completed'`;
+   * `'superseded'` reports an interrupted prior deal replaced by a newer deal/session or hand end.
+   */
   readonly onDealAnimationEnd?: (info: DealAnimationEndInfo) => void;
   /** Observable callback fired whenever Hero's active turn state changes. */
   readonly onHeroTurnChange?: (info: HeroTurnChangeInfo) => void;

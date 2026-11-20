@@ -19,6 +19,7 @@ import { HeroControls } from '../../../src/ui/sandbox/components/HeroControls';
 import { TableSeat } from '../../../src/ui/sandbox/components/TableSeat';
 import {
   syncDealAnimationLifecycle,
+  type DealAnimationMetadata,
   type DealAnimState,
   type PendingDealDescriptor,
 } from '../../../src/ui/sandbox/dealAnimation';
@@ -733,7 +734,7 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
 
     const runEffect = (params: {
       readonly dealKey: string | null;
-      readonly info: DealAnimationEndInfo | null;
+      readonly info: DealAnimationMetadata | null;
       readonly effectiveReducedMotion?: boolean;
     }) => {
       activeCleanup?.();
@@ -752,6 +753,10 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
       });
     };
 
+    const resetCompletedKey = () => {
+      completedDealKeyRef.current = null;
+    };
+
     const unmount = () => {
       activeCleanup?.();
       activeCleanup = undefined;
@@ -763,6 +768,7 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
       getState: () => currentState,
       onDealAnimationEndRef,
       runEffect,
+      resetCompletedKey,
       unmount,
     };
   }
@@ -771,11 +777,11 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
     vi.restoreAllMocks();
   });
 
-  it('O3 regression: key A replaced by key B before 320ms emits A once with original info, keeps animating for B, then marks ready and emits B once', () => {
+  it('O3 regression: key A replaced by key B before 320ms emits A as superseded with original info, keeps animating for B, then marks ready and emits B as completed', () => {
     const clock = createFakeClock();
     const harness = createDealHarness();
-    const infoA: DealAnimationEndInfo = { handNumber: 1, street: 'flop', eventCount: 4 };
-    const infoB: DealAnimationEndInfo = { handNumber: 1, street: 'turn', eventCount: 9 };
+    const infoA: DealAnimationMetadata = { handNumber: 1, street: 'flop', eventCount: 4 };
+    const infoB: DealAnimationMetadata = { handNumber: 1, street: 'turn', eventCount: 9 };
 
     // Key A starts at t = 0ms
     harness.runEffect({ dealKey: 'seed-1:1:flop:3', info: infoA });
@@ -786,30 +792,88 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
     clock.advance(300);
     harness.runEffect({ dealKey: 'seed-1:1:turn:4', info: infoB });
 
-    // A's interrupted completion emitted once with A's original info; B is still animating (NOT ready)
-    expect(harness.completions).toEqual([infoA]);
+    // A's interrupted notification emitted once with outcome 'superseded' and A's original info; B is still animating (NOT ready)
+    expect(harness.completions).toEqual([{ ...infoA, outcome: 'superseded' }]);
     expect(harness.getState()).toBe('animating');
     expect(harness.stateHistory).not.toContain('ready');
 
     // Passing A's original 320ms mark (t = 320ms..619ms) must NOT trigger a stale callback or mark B ready
     clock.advance(319);
-    expect(harness.completions).toEqual([infoA]);
+    expect(harness.completions).toEqual([{ ...infoA, outcome: 'superseded' }]);
     expect(harness.getState()).toBe('animating');
 
-    // At t = 620ms (320ms after B started), B completes once and transitions to ready
+    // At t = 620ms (320ms after B started), B completes once with outcome 'completed' and transitions to ready
     clock.advance(1);
-    expect(harness.completions).toEqual([infoA, infoB]);
+    expect(harness.completions).toEqual([
+      { ...infoA, outcome: 'superseded' },
+      { ...infoB, outcome: 'completed' },
+    ]);
     expect(harness.getState()).toBe('ready');
 
     // Further time produces no duplicate callbacks
     clock.advance(1000);
-    expect(harness.completions).toEqual([infoA, infoB]);
+    expect(harness.completions).toEqual([
+      { ...infoA, outcome: 'superseded' },
+      { ...infoB, outcome: 'completed' },
+    ]);
   });
 
-  it('O3 regression: key A replaced by none (hand ends -> between-hands) before 320ms emits A once and settles to idle', () => {
+  it('O3 regression: quick new-session reset with identical semantic metadata marks old deal superseded and emits new deal completed only after its own expiry', () => {
     const clock = createFakeClock();
     const harness = createDealHarness();
-    const infoA: DealAnimationEndInfo = { handNumber: 2, street: 'flop', eventCount: 6 };
+    const sameMetadata: DealAnimationMetadata = { handNumber: 1, street: 'flop', eventCount: 3 };
+
+    // Original session hand 1 flop starts at t = 0ms
+    harness.runEffect({ dealKey: 'seed-session-1:1:flop:3', info: sameMetadata });
+    expect(harness.getState()).toBe('animating');
+    expect(harness.completions).toEqual([]);
+
+    // At t = 120ms, user triggers a quick new-session restart whose hand 1 flop has identical semantic metadata
+    clock.advance(120);
+    harness.resetCompletedKey();
+    harness.runEffect({ dealKey: 'seed-session-2:1:flop:3', info: { ...sameMetadata } });
+
+    // Pending old event is explicitly marked 'superseded'; consumer must NOT start the clock yet
+    expect(harness.completions).toEqual([{ ...sameMetadata, outcome: 'superseded' }]);
+    expect(harness.completions.filter((c) => c.outcome === 'completed')).toEqual([]);
+    expect(harness.getState()).toBe('animating');
+    expect(harness.stateHistory).not.toContain('ready');
+
+    // Passing the old deal's original 320ms expiry (t = 320ms) and up to t = 439ms must NOT emit 'completed'
+    clock.advance(319);
+    expect(harness.completions).toEqual([{ ...sameMetadata, outcome: 'superseded' }]);
+    expect(harness.getState()).toBe('animating');
+
+    // At t = 440ms (320ms after new session deal started), new deal emits 'completed' with distinct object
+    clock.advance(1);
+    expect(harness.completions).toEqual([
+      { ...sameMetadata, outcome: 'superseded' },
+      { ...sameMetadata, outcome: 'completed' },
+    ]);
+    expect(harness.completions[0]).not.toBe(harness.completions[1]);
+    expect(harness.getState()).toBe('ready');
+
+    // Quick new-session reset into reduced motion: old deal is 'superseded', new deal immediately 'completed'
+    const reducedHarness = createDealHarness();
+    reducedHarness.runEffect({ dealKey: 'seed-session-3:1:flop:3', info: sameMetadata });
+    clock.advance(80);
+    reducedHarness.resetCompletedKey();
+    reducedHarness.runEffect({
+      dealKey: 'seed-session-4:1:flop:3',
+      info: { ...sameMetadata },
+      effectiveReducedMotion: true,
+    });
+    expect(reducedHarness.completions).toEqual([
+      { ...sameMetadata, outcome: 'superseded' },
+      { ...sameMetadata, outcome: 'completed' },
+    ]);
+    expect(reducedHarness.getState()).toBe('ready');
+  });
+
+  it('O3 regression: key A replaced by none (hand ends -> between-hands) before 320ms emits A as superseded once and settles to idle', () => {
+    const clock = createFakeClock();
+    const harness = createDealHarness();
+    const infoA: DealAnimationMetadata = { handNumber: 2, street: 'flop', eventCount: 6 };
 
     harness.runEffect({ dealKey: 'seed-1:2:flop:3', info: infoA });
     expect(harness.getState()).toBe('animating');
@@ -819,36 +883,43 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
     clock.advance(250);
     harness.runEffect({ dealKey: null, info: null });
 
-    expect(harness.completions).toEqual([infoA]);
+    expect(harness.completions).toEqual([{ ...infoA, outcome: 'superseded' }]);
     expect(harness.getState()).toBe('idle');
 
     // Original timer must not re-fire or flip state back to ready
     clock.advance(500);
-    expect(harness.completions).toEqual([infoA]);
+    expect(harness.completions).toEqual([{ ...infoA, outcome: 'superseded' }]);
     expect(harness.getState()).toBe('idle');
   });
 
-  it('O3 regression: rapid A -> B -> C before expiry emits each once in order and marks ready only after C completes', () => {
+  it('O3 regression: rapid A -> B -> C before expiry emits superseded for A & B and completed only after C finishes', () => {
     const clock = createFakeClock();
     const harness = createDealHarness();
-    const infoA: DealAnimationEndInfo = { handNumber: 1, street: 'flop', eventCount: 3 };
-    const infoB: DealAnimationEndInfo = { handNumber: 1, street: 'turn', eventCount: 7 };
-    const infoC: DealAnimationEndInfo = { handNumber: 1, street: 'river', eventCount: 11 };
+    const infoA: DealAnimationMetadata = { handNumber: 1, street: 'flop', eventCount: 3 };
+    const infoB: DealAnimationMetadata = { handNumber: 1, street: 'turn', eventCount: 7 };
+    const infoC: DealAnimationMetadata = { handNumber: 1, street: 'river', eventCount: 11 };
 
     harness.runEffect({ dealKey: 'seed-1:1:flop:3', info: infoA });
     clock.advance(100);
     harness.runEffect({ dealKey: 'seed-1:1:turn:4', info: infoB });
-    expect(harness.completions).toEqual([infoA]);
+    expect(harness.completions).toEqual([{ ...infoA, outcome: 'superseded' }]);
     expect(harness.getState()).toBe('animating');
 
     clock.advance(100);
     harness.runEffect({ dealKey: 'seed-1:1:river:5', info: infoC });
-    expect(harness.completions).toEqual([infoA, infoB]);
+    expect(harness.completions).toEqual([
+      { ...infoA, outcome: 'superseded' },
+      { ...infoB, outcome: 'superseded' },
+    ]);
     expect(harness.getState()).toBe('animating');
     expect(harness.stateHistory).not.toContain('ready');
 
     clock.advance(320);
-    expect(harness.completions).toEqual([infoA, infoB, infoC]);
+    expect(harness.completions).toEqual([
+      { ...infoA, outcome: 'superseded' },
+      { ...infoB, outcome: 'superseded' },
+      { ...infoC, outcome: 'completed' },
+    ]);
     expect(harness.getState()).toBe('ready');
   });
 
@@ -858,7 +929,7 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
     // 1. Strict Mode double-invoke with normal motion + callback identity swap
     const normalResults: Array<{ tag: string; info: DealAnimationEndInfo }> = [];
     const h1 = createDealHarness((info) => normalResults.push({ tag: 'v1', info }));
-    const info1: DealAnimationEndInfo = { handNumber: 1, street: 'flop', eventCount: 4 };
+    const info1: DealAnimationMetadata = { handNumber: 1, street: 'flop', eventCount: 4 };
 
     // Mount -> Strict Mode cleanup -> immediate remount for same key (even if timeline moved on)
     h1.runEffect({ dealKey: 'seed-sm:1:flop:3', info: info1 });
@@ -872,21 +943,21 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
     // Swap callback ref before completion
     h1.onDealAnimationEndRef.current = (info) => normalResults.push({ tag: 'v2', info });
     clock.advance(320);
-    expect(normalResults).toEqual([{ tag: 'v2', info: info1 }]);
+    expect(normalResults).toEqual([{ tag: 'v2', info: { ...info1, outcome: 'completed' } }]);
     expect(h1.getState()).toBe('ready');
 
-    // 2. Strict Mode + reduced motion emits once, and toggling reducedMotion off afterwards does not re-emit
+    // 2. Strict Mode + reduced motion emits once as completed, and toggling reducedMotion off afterwards does not re-emit
     const h2 = createDealHarness();
-    const info2: DealAnimationEndInfo = { handNumber: 1, street: 'flop', eventCount: 4 };
+    const info2: DealAnimationMetadata = { handNumber: 1, street: 'flop', eventCount: 4 };
     h2.runEffect({ dealKey: 'seed-rm:1:flop:3', info: info2, effectiveReducedMotion: true });
     h2.runEffect({ dealKey: 'seed-rm:1:flop:3', info: info2, effectiveReducedMotion: true });
     h2.runEffect({ dealKey: 'seed-rm:1:flop:3', info: info2, effectiveReducedMotion: false });
-    expect(h2.completions).toEqual([info2]);
+    expect(h2.completions).toEqual([{ ...info2, outcome: 'completed' }]);
     expect(h2.getState()).toBe('ready');
 
-    // 3. Toggling reducedMotion on mid-animation completes immediately once with original info
+    // 3. Toggling reducedMotion on mid-animation completes immediately once as completed with original info
     const h3 = createDealHarness();
-    const info3: DealAnimationEndInfo = { handNumber: 1, street: 'turn', eventCount: 8 };
+    const info3: DealAnimationMetadata = { handNumber: 1, street: 'turn', eventCount: 8 };
     h3.runEffect({ dealKey: 'seed-mid:1:turn:4', info: info3, effectiveReducedMotion: false });
     clock.advance(100);
     h3.runEffect({
@@ -894,14 +965,14 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
       info: { handNumber: 1, street: 'turn', eventCount: 10 },
       effectiveReducedMotion: true,
     });
-    expect(h3.completions).toEqual([info3]);
+    expect(h3.completions).toEqual([{ ...info3, outcome: 'completed' }]);
     expect(h3.getState()).toBe('ready');
     clock.advance(500);
-    expect(h3.completions).toEqual([info3]);
+    expect(h3.completions).toEqual([{ ...info3, outcome: 'completed' }]);
 
     // 4. Unmount while animating cancels timer and emits zero callbacks
     const h4 = createDealHarness();
-    const info4: DealAnimationEndInfo = { handNumber: 3, street: 'river', eventCount: 14 };
+    const info4: DealAnimationMetadata = { handNumber: 3, street: 'river', eventCount: 14 };
     h4.runEffect({ dealKey: 'seed-unmount:3:river:5', info: info4 });
     clock.advance(150);
     h4.unmount();
@@ -910,24 +981,27 @@ describe('P4 Deal Animation Lifecycle — O3 Superseded, Hand-End, Strict Mode &
 
     // 5. Stale timer callback invoked after key A is superseded by key B cannot mark B ready or duplicate A
     const h5 = createDealHarness();
-    const info5A: DealAnimationEndInfo = { handNumber: 4, street: 'flop', eventCount: 3 };
-    const info5B: DealAnimationEndInfo = { handNumber: 4, street: 'turn', eventCount: 8 };
+    const info5A: DealAnimationMetadata = { handNumber: 4, street: 'flop', eventCount: 3 };
+    const info5B: DealAnimationMetadata = { handNumber: 4, street: 'turn', eventCount: 8 };
     const beforeCount = clock.timers.length;
     h5.runEffect({ dealKey: 'seed-stale:4:flop:3', info: info5A });
     const staleCallbackA = clock.timers[beforeCount]!.callback;
     clock.advance(200);
     h5.runEffect({ dealKey: 'seed-stale:4:turn:4', info: info5B });
-    expect(h5.completions).toEqual([info5A]);
+    expect(h5.completions).toEqual([{ ...info5A, outcome: 'superseded' }]);
     expect(h5.getState()).toBe('animating');
 
     // Manually invoke stale callback from key A while key B is animating
     staleCallbackA();
-    expect(h5.completions).toEqual([info5A]);
+    expect(h5.completions).toEqual([{ ...info5A, outcome: 'superseded' }]);
     expect(h5.getState()).toBe('animating');
 
-    // Only key B's own expiry marks ready and emits B once
+    // Only key B's own expiry marks ready and emits B once as completed
     clock.advance(320);
-    expect(h5.completions).toEqual([info5A, info5B]);
+    expect(h5.completions).toEqual([
+      { ...info5A, outcome: 'superseded' },
+      { ...info5B, outcome: 'completed' },
+    ]);
     expect(h5.getState()).toBe('ready');
   });
 });

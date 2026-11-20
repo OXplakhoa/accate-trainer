@@ -2,9 +2,11 @@ import type { DealAnimationEndInfo } from './types';
 
 export type DealAnimState = 'idle' | 'animating' | 'ready';
 
+export type DealAnimationMetadata = Omit<DealAnimationEndInfo, 'outcome'>;
+
 export interface PendingDealDescriptor {
   readonly key: string;
-  readonly info: DealAnimationEndInfo;
+  readonly info: DealAnimationMetadata;
 }
 
 export interface DealAnimationRef<T> {
@@ -15,7 +17,7 @@ export interface DealAnimationLifecycleParams {
   readonly dealKey: string | null;
   readonly effectiveReducedMotion: boolean;
   readonly durationMs: number;
-  readonly getDealInfo: () => DealAnimationEndInfo | null;
+  readonly getDealInfo: () => DealAnimationMetadata | null;
   readonly pendingDealRef: DealAnimationRef<PendingDealDescriptor | null>;
   readonly completedDealKeyRef: DealAnimationRef<string | null>;
   readonly onDealAnimationEndRef: DealAnimationRef<
@@ -29,10 +31,12 @@ export interface DealAnimationLifecycleParams {
  *
  * Maintains the pending deal descriptor separately from the scheduled timeout so that:
  * - Superseding an in-flight deal with a new `dealKey` or hand end (`null`) emits the
- *   interrupted deal's completion once with its own original descriptor, without marking
- *   the new key ready.
+ *   interrupted deal's notification once with `outcome: 'superseded'` and its original
+ *   descriptor metadata, without marking the new key ready.
+ * - The current scheduled deal emits `outcome: 'completed'` only when ready (including
+ *   reduced motion).
  * - Strict Mode mount/cleanup, reduced-motion toggles, and callback identity changes do
- *   not emit duplicate completions or drop the original descriptor.
+ *   not emit duplicate notifications or drop the original descriptor.
  * - Stale timer callbacks cannot mark a newer key ready, and unmount never emits.
  */
 export function syncDealAnimationLifecycle({
@@ -50,7 +54,10 @@ export function syncDealAnimationLifecycle({
     pendingDealRef.current = null;
     if (completedDealKeyRef.current !== pending.key) {
       completedDealKeyRef.current = pending.key;
-      onDealAnimationEndRef.current?.(pending.info);
+      onDealAnimationEndRef.current?.({
+        ...pending.info,
+        outcome: 'superseded',
+      });
     }
   }
 
@@ -71,7 +78,14 @@ export function syncDealAnimationLifecycle({
   } else {
     const info = getDealInfo();
     if (info !== null) {
-      descriptor = { key: dealKey, info };
+      descriptor = {
+        key: dealKey,
+        info: {
+          handNumber: info.handNumber,
+          street: info.street,
+          eventCount: info.eventCount,
+        },
+      };
     }
   }
 
@@ -95,7 +109,10 @@ export function syncDealAnimationLifecycle({
     }
     completedDealKeyRef.current = dealKey;
     setDealAnimState('ready');
-    onDealAnimationEndRef.current?.(descriptor.info);
+    onDealAnimationEndRef.current?.({
+      ...descriptor.info,
+      outcome: 'completed',
+    });
   };
 
   if (effectiveReducedMotion) {

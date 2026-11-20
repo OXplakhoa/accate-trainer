@@ -2,6 +2,7 @@ export { SandboxApp } from './SandboxApp';
 export type {
   AudioSettings,
   DealAnimationEndInfo,
+  DealAnimationEndOutcome,
   DecisionQualityTone,
   HandReviewSummary,
   HeroActionValidation,
