@@ -2,3 +2,39 @@ body {
   margin: 0;
   background: #101815;
 }
+
+.accate-mode-nav {
+  display: flex;
+  gap: 8px;
+  padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  border-bottom: 1px solid #35493e;
+  background: #101815;
+  font: 600 0.9rem/1.3 system-ui, sans-serif;
+}
+
+.accate-mode-nav button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid #42564b;
+  border-radius: 8px;
+  background: #1b2923;
+  color: #f5eee2;
+  font: inherit;
+  cursor: pointer;
+}
+
+.accate-mode-nav button[aria-pressed='true'] {
+  border-color: #edc28d;
+  color: #edc28d;
+}
+
+.accate-mode-nav button:focus-visible {
+  outline: 2px solid #edc28d;
+  outline-offset: 2px;
+}
+
+.accate-app-status {
+  margin: 24px 12px;
+  color: #f5eee2;
+  font: 1rem/1.5 system-ui, sans-serif;
+}

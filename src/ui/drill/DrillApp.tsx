@@ -236,6 +236,7 @@ export function DrillApp(props: DrillAppProps) {
       const nextSpot = createDrillSpotFromHandState({ hand: props.initialSpot.hand, heroId: props.initialSpot.heroId, conceptId: selectedConcept });
       setInitialSpotError(false);
       setCurrentSpot(nextSpot);
+      setActiveTab('drill');
       if (selectedLevel === 0) setSelectedLevel(1);
       resetInputsForSpot(nextSpot, selectedLevel === 0 ? 1 : selectedLevel);
     } catch { setInitialSpotError(true); }
