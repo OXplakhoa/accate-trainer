@@ -1107,40 +1107,41 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     expect(blockedNoDeposit.statusNotice?.guidance).toContain('Bàn chỉ còn 3 người');
   });
 
-  it('OOT decision snapshot: captures pre-reserve heroStack/pot/legal context on declare, auto-executes after bot call or fold, and blocks Drill jump for bot-turn state', () => {
-    const stageAmountForHero = (
-      sess: SandboxSessionState,
-      amount: number,
-    ): SandboxSessionState => {
-      let rem = amount;
-      let next = sess;
-      const stack = sess.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack;
-      for (const denom of [100, 50, 10, 5] as const) {
-        const take = Math.min(stack[denom], Math.floor(rem / denom));
-        for (let i = 0; i < take; i++) {
-          next = stageChip(next, denom);
-        }
-        rem -= take * denom;
+  const stageAmountForHero = (
+    sess: SandboxSessionState,
+    amount: number,
+  ): SandboxSessionState => {
+    let rem = amount;
+    let next = sess;
+    const stack = sess.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack;
+    for (const denom of [100, 50, 10, 5] as const) {
+      const take = Math.min(stack[denom], Math.floor(rem / denom));
+      for (let i = 0; i < take; i++) {
+        next = stageChip(next, denom);
       }
-      expect(rem).toBe(0);
-      return next;
-    };
+      rem -= take * denom;
+    }
+    expect(rem).toBe(0);
+    return next;
+  };
 
-    const finishHandHeroCheckFold = (sess: SandboxSessionState): SandboxSessionState => {
-      let cur = sess;
-      let guard = 0;
-      while (cur.phase === 'in-hand' && cur.hand?.phase === 'betting' && guard < 120) {
-        guard++;
-        if (cur.hand.activePlayerId === HERO_PLAYER_ID) {
-          const val = getHeroActionValidation(cur);
-          cur = performHeroAction(cur, val.canCheck ? 'check' : 'fold');
-        } else {
-          cur = stepOneBotTurn(cur);
-        }
-        assertInvariants(cur, `finish oot hand step ${guard}`);
+  const finishHandHeroCheckFold = (sess: SandboxSessionState): SandboxSessionState => {
+    let cur = sess;
+    let guard = 0;
+    while (cur.phase === 'in-hand' && cur.hand?.phase === 'betting' && guard < 120) {
+      guard++;
+      if (cur.hand.activePlayerId === HERO_PLAYER_ID) {
+        const val = getHeroActionValidation(cur);
+        cur = performHeroAction(cur, val.canCheck ? 'check' : 'fold');
+      } else {
+        cur = stepOneBotTurn(cur);
       }
-      return cur;
-    };
+      assertInvariants(cur, `finish oot hand step ${guard}`);
+    }
+    return cur;
+  };
+
+  it('OOT decision snapshot: captures pre-reserve heroStack/pot/legal context on declare, auto-executes after bot call or fold, and blocks Drill jump for bot-turn state', () => {
 
     // --- Part A: Auto-execute Hero OOT Call right after intermediate bot CALLS ---
     // Probe seat order for a 4-seat table with ['dien', 'ca', 'da'] so we place opener 2 seats before Hero
@@ -1260,6 +1261,9 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     expect(sCall.heroDecisionsCurrentHand.length).toBe(1);
     const ootRecordA = sCall.heroDecisionsCurrentHand[0]!;
     expect(ootRecordA.fromOutOfTurn).toBe(true);
+    expect(ootRecordA.executed).toBe(true);
+    expect(ootRecordA.outOfTurnStatus).toBe('executed');
+    expect(ootRecordA.cancelReason).toBeNull();
     expect(ootRecordA.chosenAction.type).toBe('call');
     expect(ootRecordA.snapshot.heroStack).toBe(preDeclareHeroStackA);
     expect(ootRecordA.snapshot.potBeforeCall).toBe(preDeclarePotA);
@@ -1268,16 +1272,19 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     expect(ootRecordA.timelineLengthAtDecision).toBe(preDeclareTimelineLenA);
     expect(canPracticeDecisionRecord(ootRecordA)).toBe(false);
 
-    // Complete hand & verify end-of-hand review labels clearly mark out-of-turn
+    // Complete hand & verify end-of-hand review labels clearly mark out-of-turn and estimated Call EV
     sCall = finishHandHeroCheckFold(sCall);
     expect(sCall.hand!.phase).toBe('complete');
     expect(sCall.lastHandReview).not.toBeNull();
     const ootReviewA = sCall.lastHandReview!.decisions[0]!;
     expect(ootReviewA.record.fromOutOfTurn).toBe(true);
+    expect(ootReviewA.record.executed).toBe(true);
+    expect(ootReviewA.record.outOfTurnStatus).toBe('executed');
     expect(ootReviewA.record.snapshot.heroStack).toBe(preDeclareHeroStackA);
     expect(ootReviewA.turnLabelVi).toBe('Hô trước lượt');
     expect(ootReviewA.chosenActionLabel).toContain(`Call ${betToCallA}`);
     expect(ootReviewA.chosenActionLabel).toContain('Hô trước lượt');
+    expect(ootReviewA.chosenEvPrecision).toBe('estimated');
     expect(ootReviewA.assumptionsVi.some((line) => line.includes(`Stack Hero (trước reserve): ${preDeclareHeroStackA}`))).toBe(true);
 
     // --- Part B: Auto-execute Hero OOT Call right after intermediate bot FOLDS ---
@@ -1396,7 +1403,7 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     expect(sFold.lastHandReview!.decisions[0]!.turnLabelVi).toBe('Hô trước lượt');
   });
 
-  it('OOT cancellation: releases pending decision record on bet-change cancel, keeps timeline cancel event, and does not misattribute to subsequent Hero action', () => {
+  it('OOT cancellation: preserves pre-reserve declare-time snapshot as "Hô sớm · đã hủy", does not count as executed or alter real pot, keeps subsequent Fold distinct, and gates Drill to in-turn only', () => {
     // Pick a seed where 'dien' is immediately before Hero (seat 3) and opens flop with a bet
     let cancelSeed = '';
     let cancelSeatOrder: string[] = [];
@@ -1452,6 +1459,8 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     const heroStackPreDeclare = chipValue(
       s.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack,
     );
+    const potPreDeclare = chipValue(s.hand!.pot);
+    const timelineLenPreDeclare = s.hand!.timeline.length;
 
     // Hero declares OOT Bet 20 before Điên acts
     s = stageChip(stageChip(s, 10), 10);
@@ -1459,6 +1468,9 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     assertInvariants(s, 'oot-cancel after hero declare bet 20');
     expect(s.pendingHeroOutOfTurnDecision).not.toBeNull();
     expect(s.pendingHeroOutOfTurnDecision!.snapshot.heroStack).toBe(heroStackPreDeclare);
+    expect(s.pendingHeroOutOfTurnDecision!.snapshot.potBeforeCall).toBe(potPreDeclare);
+    // Chips reserved in declaration do not alter the real pot
+    expect(chipValue(s.hand!.pot)).toBe(potPreDeclare);
 
     // Step Điên -> Điên bets, cancelling Hero's OOT Bet 20 and returning chips
     let stepIdx = 0;
@@ -1473,21 +1485,48 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     }
 
     expect(s.hand!.activePlayerId).toBe(HERO_PLAYER_ID);
-    expect(s.hand!.currentBet).toBeGreaterThan(0);
-    // Pending record MUST be released and NOT pushed to heroDecisionsCurrentHand
+    const betFacingHero = s.hand!.currentBet;
+    expect(betFacingHero).toBeGreaterThan(0);
+
+    // Pending record MUST be cleared, and cancelled OOT snapshot preserved as a non-executed decision
     expect(s.pendingHeroOutOfTurnDecision).toBeNull();
-    expect(s.heroDecisionsCurrentHand.length).toBe(0);
+    expect(s.heroDecisionsCurrentHand.length).toBe(1);
+    const cancelledRecord = s.heroDecisionsCurrentHand[0]!;
+    expect(cancelledRecord.fromOutOfTurn).toBe(true);
+    expect(cancelledRecord.executed).toBe(false);
+    expect(cancelledRecord.outOfTurnStatus).toBe('cancelled');
+    expect(cancelledRecord.cancelReason).toBe('bet-changed');
+    expect(cancelledRecord.chosenAction.type).toBe('bet');
+    expect(cancelledRecord.snapshot.heroStack).toBe(heroStackPreDeclare);
+    expect(cancelledRecord.snapshot.potBeforeCall).toBe(potPreDeclare);
+    expect(cancelledRecord.snapshot.currentBet).toBe(0);
+    expect(cancelledRecord.timelineLengthAtDecision).toBe(timelineLenPreDeclare);
+    expect(canPracticeDecisionRecord(cancelledRecord)).toBe(false);
+
+    // Hero stack is fully restored, real pot contains ONLY ante + Điên's bet (NOT cancelled Bet 20), and no Hero player-action was executed
     expect(
       chipValue(s.hand!.seats.find((seat) => seat.playerId === HERO_PLAYER_ID)!.stack),
     ).toBe(heroStackPreDeclare);
+    expect(chipValue(s.hand!.pot)).toBe(potPreDeclare + betFacingHero);
+    expect(
+      s.hand!.timeline.some(
+        (ev) => ev.type === 'player-action' && ev.playerId === HERO_PLAYER_ID,
+      ),
+    ).toBe(false);
     expect(
       s.hand!.timeline.some(
         (ev) => ev.type === 'out-of-turn-cancelled' && ev.playerId === HERO_PLAYER_ID,
       ),
     ).toBe(true);
 
+    // Facing a real bet -> foldNeedsConfirm MUST be false
+    const facingBetValidation = getHeroActionValidation(s);
+    expect(facingBetValidation.isHeroTurn).toBe(true);
+    expect(facingBetValidation.canFold).toBe(true);
+    expect(facingBetValidation.canCheck).toBe(false);
+    expect(facingBetValidation.foldNeedsConfirm).toBe(false);
+
     // Hero now freely chooses Fold on their actual turn
-    const betFacingHero = s.hand!.currentBet;
     s = performHeroAction(s, 'fold');
     assertInvariants(s, 'oot-cancel after hero fold');
 
@@ -1496,23 +1535,235 @@ describe('P4 Sandbox Controller — Invariants, C2–C7, T1–T4, X4–X6, Showd
     expect(s.hand!.phase).toBe('complete');
     expect(s.lastHandReview).not.toBeNull();
 
-    // Review must contain ONLY Hero's actual in-turn Fold (NOT the cancelled OOT Bet 20!)
-    expect(s.lastHandReview!.decisions.length).toBe(1);
-    const onlyDecision = s.lastHandReview!.decisions[0]!;
-    expect(onlyDecision.record.fromOutOfTurn).toBe(false);
-    expect(onlyDecision.record.chosenAction.type).toBe('fold');
-    expect(onlyDecision.record.snapshot.currentBet).toBe(betFacingHero);
-    expect(onlyDecision.record.snapshot.heroStack).toBe(heroStackPreDeclare);
-    expect(onlyDecision.turnLabelVi).toBe('Đúng lượt');
-    expect(onlyDecision.chosenActionLabel).toBe('Fold');
-    expect(canPracticeDecisionRecord(onlyDecision.record)).toBe(true);
+    // Review must contain BOTH: [0] the cancelled OOT Bet 20 snapshot AND [1] Hero's actual in-turn Fold
+    expect(s.lastHandReview!.decisions.length).toBe(2);
 
-    // Timeline still preserves both out-of-turn-declared and out-of-turn-cancelled events
+    const cancelledReview = s.lastHandReview!.decisions[0]!;
+    expect(cancelledReview.record.fromOutOfTurn).toBe(true);
+    expect(cancelledReview.record.executed).toBe(false);
+    expect(cancelledReview.record.outOfTurnStatus).toBe('cancelled');
+    expect(cancelledReview.record.cancelReason).toBe('bet-changed');
+    expect(cancelledReview.record.chosenAction.type).toBe('bet');
+    expect(cancelledReview.record.snapshot.heroStack).toBe(heroStackPreDeclare);
+    expect(cancelledReview.record.snapshot.potBeforeCall).toBe(potPreDeclare);
+    expect(cancelledReview.record.snapshot.currentBet).toBe(0);
+    expect(cancelledReview.turnLabelVi).toBe('Hô sớm · đã hủy');
+    expect(cancelledReview.chosenActionLabel).toContain('Bet 20');
+    expect(cancelledReview.chosenActionLabel).toContain('Hô sớm · đã hủy');
+    expect(cancelledReview.estimatedEquity).not.toBeNull();
+    expect(Number.isFinite(cancelledReview.chosenEv)).toBe(true);
+    expect(cancelledReview.chosenEvPrecision).toBe('estimated');
+    expect(
+      cancelledReview.assumptionsVi.some(
+        (line) => line.includes('Hô sớm · đã hủy') && line.includes('không được thực hiện'),
+      ),
+    ).toBe(true);
+    expect(
+      cancelledReview.assumptionsVi.some((line) =>
+        line.includes(`Stack Hero (trước reserve): ${heroStackPreDeclare}`),
+      ),
+    ).toBe(true);
+    expect(canPracticeDecisionRecord(cancelledReview.record)).toBe(false);
+
+    const foldReview = s.lastHandReview!.decisions[1]!;
+    expect(foldReview.record.fromOutOfTurn).toBe(false);
+    expect(foldReview.record.executed).toBe(true);
+    expect(foldReview.record.outOfTurnStatus).toBeNull();
+    expect(foldReview.record.chosenAction.type).toBe('fold');
+    expect(foldReview.record.snapshot.currentBet).toBe(betFacingHero);
+    expect(foldReview.record.snapshot.heroStack).toBe(heroStackPreDeclare);
+    expect(foldReview.turnLabelVi).toBe('Đúng lượt');
+    expect(foldReview.chosenActionLabel).toBe('Fold');
+    expect(foldReview.chosenEv).toBe(0);
+    expect(foldReview.chosenEvPrecision).toBe('exact');
+    expect(foldReview.record.potOdds.hasCall).toBe(true);
+    expect(foldReview.record.potOdds.requiredEquity).toBeCloseTo(
+      betFacingHero / (potPreDeclare + betFacingHero + betFacingHero),
+      6,
+    );
+    expect(canPracticeDecisionRecord(foldReview.record)).toBe(true);
+
+    // Timeline still preserves both out-of-turn-declared and out-of-turn-cancelled events, and only 1 Hero player-action (Fold)
     expect(
       s.lastHandReview!.timeline.some(
         (ev) => ev.type === 'out-of-turn-cancelled' && ev.playerId === HERO_PLAYER_ID,
       ),
     ).toBe(true);
+    const heroExecutedActions = s.lastHandReview!.timeline.filter(
+      (ev) => ev.type === 'player-action' && ev.playerId === HERO_PLAYER_ID,
+    );
+    expect(heroExecutedActions.length).toBe(1);
+    expect(heroExecutedActions[0]!.type === 'player-action' && heroExecutedActions[0]!.action.type).toBe('fold');
+  });
+
+  it('Call EV from Monte Carlo equity is marked estimated (range/samples), while Fold EV = 0 and pot odds remain exact', () => {
+    // Pick a deterministic seed where Điên acts immediately before Hero (seat 3) and opens with a bet
+    let evSeed = '';
+    let evSeatOrder: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const candidateSeed = `p4-call-ev-precision-${i}`;
+      const probe = createSandboxSession({
+        seed: candidateSeed,
+        settings: {
+          playerCount: 4,
+          enabledRivalIds: ['dien', 'da', 'ca'],
+          allowOutOfTurn: false,
+        },
+      });
+      const order = probe.hand!.seats.map((seat) => seat.playerId);
+      if (order[3] === 'dien') {
+        evSeed = candidateSeed;
+        evSeatOrder = order;
+        break;
+      }
+    }
+    expect(evSeed).not.toBe('');
+
+    const evDeck = buildFixtureDeck({
+      seatOrderIds: evSeatOrder,
+      dealerIndex: 0,
+      holeByPlayer: {
+        [HERO_PLAYER_ID]: [parseCard('As'), parseCard('Qs')],
+        dien: [parseCard('Ac'), parseCard('Kh')],
+        da: [parseCard('2c'), parseCard('7d')],
+        ca: [parseCard('3d'), parseCard('8c')],
+      },
+      board: [
+        parseCard('Ad'),
+        parseCard('9s'),
+        parseCard('4c'),
+        parseCard('2s'),
+        parseCard('6d'),
+      ],
+    });
+
+    // Hand 1: Hero Calls facing Điên's bet -> Call EV must be 'estimated' (Monte Carlo range/samples), pot odds exact
+    let sCall = createSandboxSession({
+      seed: evSeed,
+      settings: {
+        playerCount: 4,
+        enabledRivalIds: ['dien', 'da', 'ca'],
+        allowOutOfTurn: false,
+      },
+      fixtures: { deck: evDeck, openerId: 'dien' },
+    });
+    assertInvariants(sCall, 'call-ev init');
+
+    let guard = 0;
+    while (
+      sCall.hand!.phase === 'betting' &&
+      sCall.hand!.activePlayerId !== HERO_PLAYER_ID &&
+      guard < 6
+    ) {
+      sCall = stepOneBotTurn(sCall);
+      assertInvariants(sCall, `call-ev bot step ${guard}`);
+      guard++;
+    }
+    expect(sCall.hand!.activePlayerId).toBe(HERO_PLAYER_ID);
+    const betAmount = sCall.hand!.currentBet;
+    expect(betAmount).toBeGreaterThan(0);
+    const potBeforeCall = chipValue(sCall.hand!.pot);
+
+    sCall = stageAmountForHero(sCall, betAmount);
+    sCall = performHeroAction(sCall, 'call');
+    assertInvariants(sCall, 'call-ev after hero call');
+
+    sCall = finishHandHeroCheckFold(sCall);
+    assertInvariants(sCall, 'call-ev hand complete');
+    expect(sCall.lastHandReview).not.toBeNull();
+
+    const callReview = sCall.lastHandReview!.decisions[0]!;
+    expect(callReview.record.chosenAction.type).toBe('call');
+    expect(callReview.estimatedEquity).not.toBeNull();
+    expect(callReview.equitySamples).toBeGreaterThan(0);
+    expect(callReview.chosenEvPrecision).toBe('estimated');
+    expect(callReview.record.potOdds.hasCall).toBe(true);
+    expect(callReview.record.potOdds.requiredEquity).toBeCloseTo(
+      betAmount / (potBeforeCall + betAmount),
+      6,
+    );
+    expect(
+      callReview.assumptionsVi.some(
+        (line) =>
+          line.includes('EV Call áp dụng chính xác công thức') &&
+          line.includes('ước lượng theo range/mẫu'),
+      ),
+    ).toBe(true);
+    expect(
+      callReview.assumptionsVi.some((line) => line.includes('Pot odds chính xác')),
+    ).toBe(true);
+    expect(callReview.explanationVi).toContain('EV ước lượng theo range/mẫu');
+
+    // Hand 2 (same fixture): Hero Folds facing Điên's bet -> Fold EV = 0 must remain 'exact'
+    let sFold = createSandboxSession({
+      seed: evSeed,
+      settings: {
+        playerCount: 4,
+        enabledRivalIds: ['dien', 'da', 'ca'],
+        allowOutOfTurn: false,
+      },
+      fixtures: { deck: evDeck, openerId: 'dien' },
+    });
+    guard = 0;
+    while (
+      sFold.hand!.phase === 'betting' &&
+      sFold.hand!.activePlayerId !== HERO_PLAYER_ID &&
+      guard < 6
+    ) {
+      sFold = stepOneBotTurn(sFold);
+      assertInvariants(sFold, `fold-ev bot step ${guard}`);
+      guard++;
+    }
+    expect(sFold.hand!.activePlayerId).toBe(HERO_PLAYER_ID);
+    expect(getHeroActionValidation(sFold).foldNeedsConfirm).toBe(false);
+    sFold = performHeroAction(sFold, 'fold');
+    assertInvariants(sFold, 'fold-ev after hero fold');
+    sFold = advanceUntilHeroOrEnd(sFold);
+    assertInvariants(sFold, 'fold-ev hand complete');
+
+    const foldReview = sFold.lastHandReview!.decisions[0]!;
+    expect(foldReview.record.chosenAction.type).toBe('fold');
+    expect(foldReview.chosenEv).toBe(0);
+    expect(foldReview.chosenEvPrecision).toBe('exact');
+    expect(foldReview.record.potOdds.hasCall).toBe(true);
+    expect(
+      foldReview.assumptionsVi.some((line) => line.includes('EV Fold = 0 điểm là giá trị chính xác')),
+    ).toBe(true);
+    expect(foldReview.explanationVi).toContain('EV chính xác');
+  });
+
+  it('foldNeedsConfirm only holds on Hero free-check opportunity and clears after Bet, Auto timeout, or when facing a bet', () => {
+    let s = createSandboxSession({
+      seed: 'p4-free-fold-validation-1',
+      settings: { playerCount: 4, allowOutOfTurn: false },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    assertInvariants(s, 'free-fold init');
+
+    // Hero opens flop -> canCheck === true -> foldNeedsConfirm === true
+    const vFree = getHeroActionValidation(s);
+    expect(vFree.isHeroTurn).toBe(true);
+    expect(vFree.canFold).toBe(true);
+    expect(vFree.canCheck).toBe(true);
+    expect(vFree.foldNeedsConfirm).toBe(true);
+
+    // After Hero Bets 10 -> turn leaves Hero, foldNeedsConfirm becomes false
+    s = performHeroAction(stageChip(s, 10), 'bet');
+    assertInvariants(s, 'free-fold after bet');
+    expect(getHeroActionValidation(s).foldNeedsConfirm).toBe(false);
+
+    // On a fresh free-check turn, Auto timeout executes Check and clears turn/foldNeedsConfirm
+    let sTimeout = createSandboxSession({
+      seed: 'p4-free-fold-validation-2',
+      settings: { playerCount: 4, allowOutOfTurn: false },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    assertInvariants(sTimeout, 'free-fold timeout init');
+    expect(getHeroActionValidation(sTimeout).foldNeedsConfirm).toBe(true);
+    sTimeout = performHeroAutoTimeout(sTimeout);
+    assertInvariants(sTimeout, 'free-fold after timeout');
+    expect(getHeroActionValidation(sTimeout).isHeroTurn).toBe(false);
+    expect(getHeroActionValidation(sTimeout).foldNeedsConfirm).toBe(false);
   });
 
   it('Topbar mute syncs pendingSettings & storage for next hand; spectator Hero cannot enter pendingHeroLeave', () => {

@@ -100,6 +100,20 @@ export function HandReviewModal({
               ) : (
                 review.decisions.map((item) => {
                   const snap = item.record.snapshot;
+                  const isCancelledOot =
+                    item.record.fromOutOfTurn &&
+                    (item.record.outOfTurnStatus === 'cancelled' || !item.record.executed);
+                  const turnPillClass = isCancelledOot
+                    ? 'sb-pill--fold'
+                    : item.record.fromOutOfTurn
+                      ? 'sb-pill--pending'
+                      : 'sb-pill--street';
+                  const evPrecisionLabel =
+                    item.chosenEvPrecision === 'exact'
+                      ? 'chính xác'
+                      : item.record.chosenAction.type === 'call'
+                        ? 'ước lượng theo range/mẫu'
+                        : 'ước lượng';
                   return (
                     <article key={item.record.decisionIndex} className="sb-decision-card">
                       <div className="sb-decision-card__head">
@@ -107,9 +121,7 @@ export function HandReviewModal({
                           <span className="sb-pill sb-pill--street">
                             {formatStreetLabel(snap.street, terminology)}
                           </span>
-                          <span
-                            className={`sb-pill ${item.record.fromOutOfTurn ? 'sb-pill--pending' : 'sb-pill--street'}`}
-                          >
+                          <span className={`sb-pill ${turnPillClass}`}>
                             {item.turnLabelVi}
                           </span>
                           <strong className="sb-decision-card__action">
@@ -145,7 +157,11 @@ export function HandReviewModal({
 
                       <div className="sb-metrics-grid sb-num">
                         <div className="sb-metric-box">
-                          <span className="sb-label">Pot odds (Equity cần)</span>
+                          <span className="sb-label">
+                            {item.record.potOdds.hasCall
+                              ? 'Pot odds · Equity cần (chính xác)'
+                              : 'Pot odds (Equity cần)'}
+                          </span>
                           <strong>
                             {item.record.potOdds.hasCall
                               ? `${formatPercentVi(item.record.potOdds.requiredEquity)} (${item.record.potOdds.potToCallLabel})`
@@ -161,9 +177,7 @@ export function HandReviewModal({
                           </strong>
                         </div>
                         <div className="sb-metric-box">
-                          <span className="sb-label">
-                            EV hành động ({item.chosenEvPrecision === 'exact' ? 'chính xác' : 'ước lượng'})
-                          </span>
+                          <span className="sb-label">EV hành động ({evPrecisionLabel})</span>
                           <strong>{formatEvVi(item.chosenEv)}</strong>
                         </div>
                         <div className="sb-metric-box">

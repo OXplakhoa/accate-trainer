@@ -9,6 +9,7 @@ import type {
   LedgerEvent,
   LegalActions,
   NongTiltState,
+  OutOfTurnCancelReason,
   OutOfTurnDeclaration,
   PotOddsResult,
   RivalId,
@@ -62,6 +63,8 @@ export interface PendingHeroOutOfTurnDecision {
   readonly timelineLengthAtDecision: number;
 }
 
+export type OutOfTurnDecisionStatus = 'executed' | 'cancelled';
+
 export interface HeroDecisionRecord {
   readonly decisionIndex: number;
   readonly street: Street;
@@ -69,6 +72,9 @@ export interface HeroDecisionRecord {
   readonly handStateAtDecision: HandState;
   readonly chosenAction: BettingAction;
   readonly fromOutOfTurn: boolean;
+  readonly executed: boolean;
+  readonly outOfTurnStatus: OutOfTurnDecisionStatus | null;
+  readonly cancelReason: OutOfTurnCancelReason | null;
   readonly potOdds: PotOddsResult;
   readonly activeOpponentIds: readonly string[];
   readonly timelineLengthAtDecision: number;

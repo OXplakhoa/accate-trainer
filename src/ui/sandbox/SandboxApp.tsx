@@ -60,6 +60,7 @@ import {
 import { loadSandboxSettings, sanitizeSettings, saveSandboxSettings } from './settings';
 import {
   HERO_PLAYER_ID,
+  type DealAnimationEndInfo,
   type SandboxAppProps,
   type SandboxSessionState,
   type SandboxSettings,
@@ -130,10 +131,27 @@ export function SandboxApp({
   const [systemReducedMotion, setSystemReducedMotion] = useState<boolean>(() =>
     detectSystemReducedMotion(),
   );
-  const [dealAnimState, setDealAnimState] = useState<'idle' | 'animating'>('idle');
+
+  const effectiveReducedMotion = session.appliedSettings.reducedMotion || systemReducedMotion;
+  const lang = session.appliedSettings.terminology;
+
+  const dealKey =
+    session.phase === 'in-hand' && session.hand !== null
+      ? `${session.sessionSeed}:${session.handNumber}:${session.hand.street}:${session.hand.board.length}`
+      : null;
+
+  const [dealAnimState, setDealAnimState] = useState<'idle' | 'animating' | 'ready'>(() => {
+    if (dealKey === null) {
+      return 'idle';
+    }
+    return effectiveReducedMotion ? 'ready' : 'animating';
+  });
 
   const sessionRef = useRef<SandboxSessionState>(session);
   sessionRef.current = session;
+
+  const onDealAnimationEndRef = useRef<SandboxAppProps['onDealAnimationEnd']>(onDealAnimationEnd);
+  onDealAnimationEndRef.current = onDealAnimationEnd;
 
   const audioRef = useRef<SandboxAudioEngine | null>(null);
   if (audioRef.current === null) {
@@ -141,11 +159,8 @@ export function SandboxApp({
   }
 
   const processedTurnKeyRef = useRef<string | null>(null);
-  const lastDealKeyRef = useRef<string | null>(null);
+  const completedDealKeyRef = useRef<string | null>(null);
   const lastAudioSessionSeedRef = useRef<string>(session.sessionSeed);
-
-  const effectiveReducedMotion = session.appliedSettings.reducedMotion || systemReducedMotion;
-  const lang = session.appliedSettings.terminology;
 
   // Listen to OS prefers-reduced-motion changes
   useEffect(() => {
@@ -198,45 +213,53 @@ export function SandboxApp({
   }, [session.sessionSeed, session.phase, session.handNumber, session.hand]);
 
   // Observable deal / reveal animation lifecycle (O3 readiness for P5 Tournament)
-  const handRefForDeal = session.hand;
-  const dealKey =
-    session.phase === 'in-hand' && handRefForDeal !== null
-      ? `${session.handNumber}:${handRefForDeal.street}:${handRefForDeal.board.length}`
-      : null;
-
   useEffect(() => {
-    if (dealKey === null || handRefForDeal === null) {
-      lastDealKeyRef.current = null;
+    if (dealKey === null) {
+      completedDealKeyRef.current = null;
       setDealAnimState('idle');
       return;
     }
-    if (lastDealKeyRef.current === dealKey) {
+
+    if (completedDealKeyRef.current === dealKey) {
+      setDealAnimState('ready');
       return;
     }
-    lastDealKeyRef.current = dealKey;
 
-    const info = {
-      handNumber: session.handNumber,
-      street: handRefForDeal.street,
-      eventCount: handRefForDeal.timeline.length,
+    const currentSession = sessionRef.current;
+    const currentHand = currentSession.hand;
+    if (currentSession.phase !== 'in-hand' || currentHand === null) {
+      completedDealKeyRef.current = null;
+      setDealAnimState('idle');
+      return;
+    }
+
+    const info: DealAnimationEndInfo = {
+      handNumber: currentSession.handNumber,
+      street: currentHand.street,
+      eventCount: currentHand.timeline.length,
+    };
+
+    const completeDeal = () => {
+      if (completedDealKeyRef.current === dealKey) {
+        return;
+      }
+      completedDealKeyRef.current = dealKey;
+      setDealAnimState('ready');
+      onDealAnimationEndRef.current?.(info);
     };
 
     if (effectiveReducedMotion) {
-      setDealAnimState('idle');
-      onDealAnimationEnd?.(info);
+      completeDeal();
       return;
     }
 
     setDealAnimState('animating');
-    const timer = globalThis.setTimeout(() => {
-      setDealAnimState('idle');
-      onDealAnimationEnd?.(info);
-    }, DEAL_ANIMATION_MS);
+    const timer = globalThis.setTimeout(completeDeal, DEAL_ANIMATION_MS);
 
     return () => {
       globalThis.clearTimeout(timer);
     };
-  }, [dealKey, effectiveReducedMotion, handRefForDeal, onDealAnimationEnd, session.handNumber]);
+  }, [dealKey, effectiveReducedMotion]);
 
   // Expose external controller API for P5 Tournament timeout (O1/O2)
   useEffect(() => {
@@ -456,7 +479,7 @@ export function SandboxApp({
       audioRef.current?.updateSettings(sanitized.audio);
       if (applyMode === 'new-session') {
         audioRef.current?.clearPlayedHistory();
-        lastDealKeyRef.current = null;
+        completedDealKeyRef.current = null;
       }
       saveSandboxSettings(sanitized, storage);
       processedTurnKeyRef.current = null;
@@ -792,6 +815,7 @@ export function SandboxApp({
               potValue={potValue}
               streetCap={activeHand.streetCap}
               terminology={lang}
+              opportunityKey={`${session.sessionSeed}:${session.handNumber}:${activeHand.phase}:${activeHand.street}:${activeHand.activePlayerId ?? 'none'}:${activeHand.currentBet}:${activeHand.timeline.length}:${session.stepCounter}`}
               isHeroSeated={heroSeat !== null}
               pendingHeroLeave={session.pendingHeroLeave}
               isAwaitingPayout={activeHand.phase === 'awaiting-payout'}

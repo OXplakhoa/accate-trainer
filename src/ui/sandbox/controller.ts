@@ -47,6 +47,7 @@ import {
   type HandState,
   type LedgerEvent,
   type LegalActions,
+  type OutOfTurnCancelReason,
   type OutOfTurnDeclaration,
   type PublicSeatView,
   type RivalId,
@@ -69,6 +70,7 @@ import {
   HERO_PLAYER_ID,
   type HeroActionValidation,
   type HeroDecisionRecord,
+  type OutOfTurnDecisionStatus,
   type PendingHeroOutOfTurnDecision,
   type SandboxSessionState,
   type SandboxSettings,
@@ -560,7 +562,7 @@ export function getHeroActionValidation(session: SandboxSessionState): HeroActio
     stagedValue,
     legalActions,
     canFold: isHeroTurn && legalActions.canFold,
-    foldNeedsConfirm: isHeroTurn && legalActions.canCheck,
+    foldNeedsConfirm: isHeroTurn && legalActions.canFold && legalActions.canCheck,
     canCheck: legalActions.canCheck,
     canConfirmCall,
     callAmount: legalActions.callAmount,
@@ -645,6 +647,9 @@ function captureHeroDecisionRecord(
     handStateAtDecision: hand,
     chosenAction,
     fromOutOfTurn,
+    executed: true,
+    outOfTurnStatus: fromOutOfTurn ? 'executed' : null,
+    cancelReason: null,
     potOdds,
     activeOpponentIds: Object.freeze(activeOpponentIds),
     timelineLengthAtDecision: hand.timeline.length,
@@ -674,6 +679,8 @@ function capturePendingHeroOutOfTurnDecision(
 function materializeHeroDecisionFromPending(
   pending: PendingHeroOutOfTurnDecision,
   decisionIndex: number,
+  status: OutOfTurnDecisionStatus,
+  cancelReason: OutOfTurnCancelReason | null,
 ): HeroDecisionRecord {
   return Object.freeze({
     decisionIndex,
@@ -682,6 +689,9 @@ function materializeHeroDecisionFromPending(
     handStateAtDecision: pending.handStateAtDecision,
     chosenAction: pending.declaration.action,
     fromOutOfTurn: true,
+    executed: status === 'executed',
+    outOfTurnStatus: status,
+    cancelReason,
     potOdds: pending.potOdds,
     activeOpponentIds: pending.activeOpponentIds,
     timelineLengthAtDecision: pending.timelineLengthAtDecision,
@@ -691,10 +701,10 @@ function materializeHeroDecisionFromPending(
 /**
  * Guard for the Review -> Drill jump button:
  * Only offers Drill practice when the stored hand state is Hero's actual turn
- * with valid normal legal actions (never sends an out-of-turn or bot-turn `HandState`).
+ * with valid normal legal actions (never sends an out-of-turn, cancelled, or bot-turn `HandState`).
  */
 export function canPracticeDecisionRecord(record: HeroDecisionRecord): boolean {
-  if (record.fromOutOfTurn) {
+  if (record.fromOutOfTurn || !record.executed || record.outOfTurnStatus !== null) {
     return false;
   }
   const hand = record.handStateAtDecision;
@@ -1106,6 +1116,17 @@ function finishBotStep(
     (s) => s.playerId === HERO_PLAYER_ID && s.declaration !== null,
   );
 
+  const cancelEvent =
+    heroCancelled !== undefined
+      ? applied.events.find(
+          (ev) => ev.type === 'out-of-turn-cancelled' && ev.playerId === HERO_PLAYER_ID,
+        )
+      : undefined;
+  const cancelReason: OutOfTurnCancelReason =
+    cancelEvent !== undefined && cancelEvent.type === 'out-of-turn-cancelled'
+      ? cancelEvent.reason
+      : 'bet-changed';
+
   if (heroAutoExec !== undefined) {
     if (
       nextPendingOot !== null &&
@@ -1113,12 +1134,31 @@ function finishBotStep(
     ) {
       nextDecisions = [
         ...nextDecisions,
-        materializeHeroDecisionFromPending(nextPendingOot, nextDecisions.length),
+        materializeHeroDecisionFromPending(nextPendingOot, nextDecisions.length, 'executed', null),
       ];
     }
     nextPendingOot = null;
-  } else if (heroCancelled !== undefined || !heroStillHasDeclaration) {
-    // Release any pending record when cancelled or no longer active so it is never attached to another action.
+  } else if (heroCancelled !== undefined) {
+    // Preserve the pre-reserve declaration-time snapshot as a cancelled out-of-turn decision
+    // so end-of-hand review grades Hero's decision at declare time without marking it executed
+    // or misattributing it to any subsequent Fold/Call.
+    if (
+      nextPendingOot !== null &&
+      matchesPendingDeclaration(nextPendingOot, heroCancelled)
+    ) {
+      nextDecisions = [
+        ...nextDecisions,
+        materializeHeroDecisionFromPending(
+          nextPendingOot,
+          nextDecisions.length,
+          'cancelled',
+          cancelReason,
+        ),
+      ];
+    }
+    nextPendingOot = null;
+  } else if (!heroStillHasDeclaration) {
+    // Defensive release when no longer active so it is never attached to another action.
     nextPendingOot = null;
   }
 
@@ -1127,19 +1167,12 @@ function finishBotStep(
 
   let notice = session.statusNotice;
   if (heroCancelled !== undefined) {
-    const cancelEvent = applied.events.find(
-      (ev) => ev.type === 'out-of-turn-cancelled' && ev.playerId === HERO_PLAYER_ID,
-    );
-    const reason =
-      cancelEvent !== undefined && cancelEvent.type === 'out-of-turn-cancelled'
-        ? cancelEvent.reason
-        : 'bet-changed';
     const cancelMessage =
-      reason === 'bet-changed'
+      cancelReason === 'bet-changed'
         ? 'Lời hô trước của bạn đã bị hủy vì mức cược thay đổi — chip đã trả về stack, bạn được quyết định lại tự do!'
-        : reason === 'action-no-longer-legal'
+        : cancelReason === 'action-no-longer-legal'
           ? 'Lời hô trước của bạn đã bị hủy vì hành động không còn hợp lệ khi tới lượt — chip đã trả về stack.'
-          : reason === 'street-ended'
+          : cancelReason === 'street-ended'
             ? 'Lời hô trước của bạn đã bị hủy vì vòng cược đã kết thúc — chip đã trả về stack.'
             : 'Lời hô trước của bạn đã bị hủy vì ván đã kết thúc — chip đã trả về stack.';
     notice = {

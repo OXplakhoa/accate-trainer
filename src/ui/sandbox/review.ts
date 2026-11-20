@@ -12,6 +12,7 @@ import {
   type HandState,
   type NongTiltState,
   type OpponentRangeInput,
+  type OutOfTurnCancelReason,
   type PublicTimelineEvent,
   type Rng,
 } from '../../engine';
@@ -39,6 +40,21 @@ interface CandidateEv {
   readonly label: string;
   readonly ev: number;
   readonly precision: 'exact' | 'estimated';
+}
+
+function formatCancelReasonVi(reason: OutOfTurnCancelReason | null): string {
+  switch (reason) {
+    case 'bet-changed':
+      return 'mức cược thay đổi trước khi tới lượt';
+    case 'action-no-longer-legal':
+      return 'hành động không còn hợp lệ khi tới lượt';
+    case 'street-ended':
+      return 'vòng cược đã kết thúc trước khi tới lượt';
+    case 'hand-ended':
+      return 'ván đã kết thúc trước khi tới lượt';
+    default:
+      return 'điều kiện hành động thay đổi trước khi tới lượt';
+  }
 }
 
 function defaultOpponentResponseForStyle(rivalIds: readonly (string | null)[]): {
@@ -230,17 +246,32 @@ function evaluateHeroDecision(
 
   const effectiveEquity = estimatedEquity ?? 0.5;
   const candidates: CandidateEv[] = [];
-  const turnLabelVi = record.fromOutOfTurn ? 'Hô trước lượt' : 'Đúng lượt';
+  const isCancelledOot =
+    record.fromOutOfTurn && (record.outOfTurnStatus === 'cancelled' || !record.executed);
+  const isExecutedOot = record.fromOutOfTurn && !isCancelledOot;
+  const turnLabelVi = isCancelledOot
+    ? 'Hô sớm · đã hủy'
+    : isExecutedOot
+      ? 'Hô trước lượt'
+      : 'Đúng lượt';
   const assumptionsVi: string[] = [
     `Street: ${formatStreetLabel(snapshot.street, lang)} · Cap street: ${snapshot.streetCap} điểm.`,
-    record.fromOutOfTurn
-      ? 'Thời điểm quyết định: Hô trước lượt (được tự động thực hiện khi tới lượt; chấm theo thông tin công khai lúc hô trước khi reserve chip).'
-      : 'Thời điểm quyết định: Đúng lượt.',
+    isCancelledOot
+      ? `Thời điểm quyết định: Hô sớm · đã hủy (${formatCancelReasonVi(record.cancelReason)}; lời hô không được thực hiện, chip đã trả về stack và không làm thay đổi pot thật — chấm theo thông tin công khai lúc hô trước khi reserve chip).`
+      : isExecutedOot
+        ? 'Thời điểm quyết định: Hô trước lượt (được tự động thực hiện khi tới lượt; chấm theo thông tin công khai lúc hô trước khi reserve chip).'
+        : 'Thời điểm quyết định: Đúng lượt.',
     record.fromOutOfTurn
       ? `Pot lúc hô trước: ${snapshot.potBeforeCall} · Stack Hero (trước reserve): ${snapshot.heroStack} · Vị trí: ${snapshot.position.label ?? '—'}.`
       : `Pot trước lượt: ${snapshot.potBeforeCall} · Stack Hero: ${snapshot.heroStack} · Vị trí: ${snapshot.position.label ?? '—'}.`,
     `Số đối thủ còn trong ván: ${snapshot.activeOpponentCount}${record.activeOpponentIds.length > MAX_SIMULATED_OPPONENTS ? ` (mô phỏng ${prioritizedOppIds.length} đối thủ chính để giữ tốc độ)` : ''}.`,
   ];
+
+  if (potOdds.hasCall) {
+    assumptionsVi.push(
+      `Pot odds chính xác theo pot và khoản call tại thời điểm quyết định: ${formatPercentVi(potOdds.requiredEquity)} (${potOdds.potToCallLabel}).`,
+    );
+  }
 
   if (estimatedEquity !== null) {
     assumptionsVi.push(
@@ -250,11 +281,11 @@ function evaluateHeroDecision(
     assumptionsVi.push('Không đủ range đối thủ hợp lệ sau blockers; dùng equity tham chiếu 50%.');
   }
 
-  // Always compute Fold EV = 0
+  // Always compute Fold EV = 0 (exact by definition, independent of equity/range simulation)
   const foldEv = calculateFoldEv(assumptionsContext);
   candidates.push({ label: 'Fold', ev: foldEv.ev, precision: 'exact' });
 
-  // Call EV if facing bet
+  // Call EV if facing bet: formula is applied exactly to inputs, but output is estimated because input equity comes from range/Monte Carlo simulation
   let callEvVal: number | null = null;
   if (snapshot.toCall > 0 && snapshot.callAmount > 0) {
     const callRes = calculateCallEv({
@@ -270,7 +301,7 @@ function evaluateHeroDecision(
     candidates.push({
       label: `Call ${snapshot.callAmount}`,
       ev: callRes.ev,
-      precision: 'exact',
+      precision: 'estimated',
     });
   }
 
@@ -294,7 +325,7 @@ function evaluateHeroDecision(
 
   const oppResponse = defaultOpponentResponseForStyle(rivalIdsForAssumptions);
   let chosenEv = 0;
-  let chosenEvPrecision: 'exact' | 'estimated' = 'exact';
+  let chosenEvPrecision: 'exact' | 'estimated' = 'estimated';
   let usedBetRaiseEstimate = false;
 
   const addedFromChosen =
@@ -302,16 +333,26 @@ function evaluateHeroDecision(
       ? 0
       : chipValue(chosenAction.chips);
   const baseActionLabel = formatBettingActionShort(chosenAction, lang, addedFromChosen);
-  const chosenActionLabel = record.fromOutOfTurn
-    ? `${baseActionLabel} (Hô trước lượt)`
-    : baseActionLabel;
+  const chosenActionLabel = isCancelledOot
+    ? `${baseActionLabel} (Hô sớm · đã hủy)`
+    : isExecutedOot
+      ? `${baseActionLabel} (Hô trước lượt)`
+      : baseActionLabel;
 
   if (chosenAction.type === 'fold') {
     chosenEv = foldEv.ev;
     chosenEvPrecision = 'exact';
+    assumptionsVi.push(
+      'EV Fold = 0 điểm là giá trị chính xác theo định nghĩa (không phụ thuộc equity hay mẫu mô phỏng).',
+    );
   } else if (chosenAction.type === 'call') {
     chosenEv = callEvVal ?? 0;
-    chosenEvPrecision = 'exact';
+    chosenEvPrecision = 'estimated';
+    assumptionsVi.push(
+      estimatedEquity !== null
+        ? `EV Call áp dụng chính xác công thức EV = equity × (pot + call) − call từ đầu vào đã cho, nhưng kết quả là giá trị ước lượng theo range/mẫu vì equity đầu vào được mô phỏng Monte Carlo (${equitySamples} mẫu).`
+        : 'EV Call áp dụng chính xác công thức từ đầu vào đã cho, nhưng kết quả là giá trị ước lượng vì dùng equity tham chiếu 50% (thiếu range đối thủ hợp lệ).',
+    );
   } else if (chosenAction.type === 'check') {
     chosenEv = checkEvVal ?? effectiveEquity * snapshot.potBeforeCall;
     chosenEvPrecision = 'estimated';
@@ -374,22 +415,30 @@ function evaluateHeroDecision(
 
   const evDiff = chosenEv - best.ev;
   let explanationVi: string;
-  const actionVerb = record.fromOutOfTurn
-    ? `Bạn đã hô trước ${baseActionLabel}`
-    : `Bạn chọn ${baseActionLabel}`;
+  const actionVerb = isCancelledOot
+    ? `Bạn đã hô sớm ${baseActionLabel} (đã hủy, không thực hiện)`
+    : isExecutedOot
+      ? `Bạn đã hô trước ${baseActionLabel}`
+      : `Bạn chọn ${baseActionLabel}`;
   const timingContext = record.fromOutOfTurn ? ' tại lúc hô trước' : '';
+  const chosenEvNote =
+    chosenEvPrecision === 'exact'
+      ? `EV chính xác ${formatEvVi(chosenEv)}`
+      : chosenAction.type === 'call'
+        ? `EV ước lượng theo range/mẫu ${formatEvVi(chosenEv)}`
+        : `EV ước lượng ${formatEvVi(chosenEv)}`;
   if (potOdds.hasCall && estimatedEquity !== null) {
     const eqText = formatPercentVi(estimatedEquity);
     const reqText = formatPercentVi(potOdds.requiredEquity);
     explanationVi =
       `Cần ${reqText} (${potOdds.potToCallLabel}) để hòa vốn call${timingContext}; equity ước lượng trước range đối thủ là ${eqText}. ` +
-      `${actionVerb} (${formatEvVi(chosenEv)}), lựa chọn cao nhất tham chiếu: ${best.label} (${formatEvVi(best.ev)}).`;
+      `${actionVerb} (${chosenEvNote}), lựa chọn cao nhất tham chiếu: ${best.label} (${formatEvVi(best.ev)}).`;
   } else if (estimatedEquity !== null) {
     explanationVi =
       `Không bị bet${timingContext} (equity ước lượng ${formatPercentVi(estimatedEquity)}). ` +
-      `${actionVerb} (${formatEvVi(chosenEv)}); phương án tham chiếu cao nhất: ${best.label} (${formatEvVi(best.ev)}).`;
+      `${actionVerb} (${chosenEvNote}); phương án tham chiếu cao nhất: ${best.label} (${formatEvVi(best.ev)}).`;
   } else {
-    explanationVi = `${actionVerb} với EV ước lượng ${formatEvVi(chosenEv)}.`;
+    explanationVi = `${actionVerb} (${chosenEvNote}).`;
   }
 
   return Object.freeze({

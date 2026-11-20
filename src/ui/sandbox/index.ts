@@ -8,6 +8,7 @@ export type {
   HeroDecisionRecord,
   HeroDecisionReview,
   HeroTurnChangeInfo,
+  OutOfTurnDecisionStatus,
   PendingHeroOutOfTurnDecision,
   SandboxAppProps,
   SandboxExternalApi,

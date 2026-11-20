@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   chipValue,
   DENOMINATIONS,
@@ -24,6 +24,7 @@ export interface HeroControlsProps {
   readonly potValue: number;
   readonly streetCap: number;
   readonly terminology: TerminologyLanguage;
+  readonly opportunityKey?: string;
   readonly isHeroSeated?: boolean;
   readonly pendingHeroLeave: boolean;
   readonly isAwaitingPayout: boolean;
@@ -53,6 +54,7 @@ export function HeroControls({
   potValue,
   streetCap,
   terminology,
+  opportunityKey,
   isHeroSeated,
   pendingHeroLeave,
   isAwaitingPayout,
@@ -73,8 +75,23 @@ export function HeroControls({
   onOpenReview,
   onNextHand,
 }: HeroControlsProps) {
-  const [confirmingFreeFold, setConfirmingFreeFold] = useState(false);
+  const effectiveOpportunityKey =
+    opportunityKey ??
+    `${isHandComplete ? 'done' : isAwaitingPayout ? 'payout' : 'live'}:${validation.isHeroTurn ? 'hero' : 'other'}:${validation.foldNeedsConfirm ? 'free' : 'paid'}:${validation.callAmount ?? 'none'}:${potValue}:${streetCap}`;
+  const [confirmingOpportunityKey, setConfirmingOpportunityKey] = useState<string | null>(null);
   const heroSeated = isHeroSeated ?? heroCards !== null;
+
+  useEffect(() => {
+    setConfirmingOpportunityKey((prev) =>
+      prev !== null && prev !== effectiveOpportunityKey ? null : prev,
+    );
+  }, [effectiveOpportunityKey]);
+
+  const showFreeFoldConfirm =
+    validation.isHeroTurn &&
+    validation.canFold &&
+    validation.foldNeedsConfirm &&
+    confirmingOpportunityKey === effectiveOpportunityKey;
 
   const canPickChips =
     heroSeated &&
@@ -92,13 +109,17 @@ export function HeroControls({
         (potValue + validation.legalActions.callAmount)
       : null;
 
+  const handleActionWithReset = (type: 'fold' | 'check' | 'call' | 'bet' | 'raise') => {
+    setConfirmingOpportunityKey(null);
+    onAction(type);
+  };
+
   const handleFoldClick = () => {
-    if (validation.foldNeedsConfirm && !confirmingFreeFold) {
-      setConfirmingFreeFold(true);
+    if (validation.foldNeedsConfirm && !showFreeFoldConfirm) {
+      setConfirmingOpportunityKey(effectiveOpportunityKey);
       return;
     }
-    setConfirmingFreeFold(false);
-    onAction('fold');
+    handleActionWithReset('fold');
   };
 
   return (
@@ -162,7 +183,10 @@ export function HeroControls({
           <button
             type="button"
             className="sb-btn sb-btn--ghost"
-            onClick={onRequestLeave}
+            onClick={() => {
+              setConfirmingOpportunityKey(null);
+              onRequestLeave();
+            }}
             disabled={!heroSeated || pendingHeroLeave}
             title={!heroSeated ? 'Chỉ dùng được khi bạn đang ngồi bàn' : undefined}
           >
@@ -289,24 +313,21 @@ export function HeroControls({
             </p>
           )}
 
-          {confirmingFreeFold && validation.isHeroTurn && (
+          {showFreeFoldConfirm && (
             <div className="sb-confirm-fold" role="alertdialog" aria-label="Xác nhận Fold khi có thể Check">
               <span>Bạn có thể Check miễn phí. Chắc chắn muốn Fold?</span>
               <div className="sb-confirm-fold__btns">
                 <button
                   type="button"
                   className="sb-btn sb-btn--danger sb-btn--sm"
-                  onClick={() => {
-                    setConfirmingFreeFold(false);
-                    onAction('fold');
-                  }}
+                  onClick={() => handleActionWithReset('fold')}
                 >
                   Xác nhận Fold
                 </button>
                 <button
                   type="button"
                   className="sb-btn sb-btn--ghost sb-btn--sm"
-                  onClick={() => setConfirmingFreeFold(false)}
+                  onClick={() => setConfirmingOpportunityKey(null)}
                 >
                   Hủy
                 </button>
@@ -330,10 +351,7 @@ export function HeroControls({
                   <button
                     type="button"
                     className="sb-btn sb-btn--secondary"
-                    onClick={() => {
-                      setConfirmingFreeFold(false);
-                      onAction('check');
-                    }}
+                    onClick={() => handleActionWithReset('check')}
                   >
                     {tTerm('check', terminology)}
                   </button>
@@ -344,7 +362,7 @@ export function HeroControls({
                     type="button"
                     className="sb-btn sb-btn--primary"
                     disabled={!validation.canConfirmBet}
-                    onClick={() => onAction('bet')}
+                    onClick={() => handleActionWithReset('bet')}
                     data-action-btn="bet"
                   >
                     {validation.canConfirmBet && validation.betAmount !== null
@@ -358,7 +376,7 @@ export function HeroControls({
                     type="button"
                     className="sb-btn sb-btn--primary"
                     disabled={!validation.canConfirmCall}
-                    onClick={() => onAction('call')}
+                    onClick={() => handleActionWithReset('call')}
                     data-action-btn="call"
                   >
                     {validation.isCallAllIn
@@ -372,7 +390,7 @@ export function HeroControls({
                     type="button"
                     className="sb-btn sb-btn--accent"
                     disabled={!validation.canConfirmRaise}
-                    onClick={() => onAction('raise')}
+                    onClick={() => handleActionWithReset('raise')}
                     data-action-btn="raise"
                   >
                     {validation.canConfirmRaise &&
