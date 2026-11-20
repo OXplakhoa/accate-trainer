@@ -212,15 +212,15 @@ export function analyzeBetSizing(
     : canRaise
       ? (legal?.raiseRange?.max ??
         Math.min(snapshot.streetCap, snapshot.heroStreetContribution + snapshot.heroStack))
-      : snapshot.streetCap;
+      : 0;
 
-  const maxHeroAddedAmount = Math.max(0, maxHeroBetOrRaiseTo - snapshot.heroStreetContribution);
+  const maxHeroAddedAmount = canBet || canRaise ? Math.max(0, maxHeroBetOrRaiseTo - snapshot.heroStreetContribution) : 0;
 
   // Base pot before hero's hypothetical bet/raise
   const potBeforeHeroBet = snapshot.potBeforeCall;
   const potSeenByOpponent = potBeforeHeroBet + maxHeroAddedAmount;
   const opponentCallAmount =
-    snapshot.currentBet === 0
+    !canBet && !canRaise ? 0 : snapshot.currentBet === 0
       ? maxHeroBetOrRaiseTo
       : Math.max(BET_STEP, maxHeroBetOrRaiseTo - snapshot.currentBet);
   const opponentPotAfterCall = potSeenByOpponent + opponentCallAmount;
@@ -241,13 +241,15 @@ export function analyzeBetSizing(
   const opponentRequiredEquityPercent = opponentPotOdds.requiredEquityPercent;
 
   const canPriceOutFlushDrawWithCap =
-    snapshot.street !== 'river' && opponentRequiredEquity > flushDrawExactEquity;
+    (canBet || canRaise) && snapshot.street !== 'river' && opponentRequiredEquity > flushDrawExactEquity;
 
   const reqPctVi = formatPercentVi(opponentRequiredEquity, 1);
   const fdPctVi = formatPercentVi(flushDrawExactEquity, 2);
 
   const drawChaseExplanationVi =
-    snapshot.street === 'river'
+    !canBet && !canRaise
+      ? 'Không có Bet hoặc Raise hợp lệ; không tính giá theo cược giả định.'
+      : snapshot.street === 'river'
       ? `Ở river không còn lá chưa lật (0 outs mua bài); kích thước cược tối đa dưới cap ${snapshot.streetCap} chỉ nhằm lấy value hoặc bluff.`
       : canPriceOutFlushDrawWithCap
         ? `Với pot ${potBeforeHeroBet}, nếu đặt mức tối đa ${maxHeroBetOrRaiseTo} (cap ${snapshot.streetCap}), đối thủ thấy pot/call = ${potSeenByOpponent}/${opponentCallAmount} (${opponentPotOdds.potToCallLabel}) và cần ${reqPctVi} equity > ${fdPctVi} (${flushDrawOuts}/${flushDrawUnseenCards}) của flush draw 1 lá → đủ giá để buộc flush draw mua sai pot odds.`

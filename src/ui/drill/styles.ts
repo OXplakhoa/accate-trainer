@@ -216,6 +216,9 @@ export const DRILL_SCOPED_CSS = `
   color: var(--drill-text);
 }
 
+.drill-workspace > *, .drill-workspace > * > *, .drill-field-grid > * { min-width: 0; }
+.drill-nav-group { flex-wrap: wrap; }
+.drill-input, .drill-select { max-width: 100%; min-width: 0; }
 .drill-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);

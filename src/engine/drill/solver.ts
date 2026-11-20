@@ -8,7 +8,7 @@ import {
   calculateDrawProbabilities,
   calculateFoldEv,
   calculateMultiPotCallEv,
-  calculatePotOddsFromSnapshot,
+  calculatePotOdds,
   classifyClearSpot,
   createCategoryTargetGroup,
   createPocketPairSetTargetGroup,
@@ -214,7 +214,7 @@ function buildContestedPotSlicesForCall(
         e.streetContribution >= state.currentBet || e.playerId === primaryRivalPlayerId
       );
     }
-    return e.playerId === primaryRivalPlayerId || e.streetContribution > 0;
+    return true;
   };
 
   const merged: Array<{
@@ -365,7 +365,7 @@ export function buildDrillSpotSolution(input: BuildDrillSpotSolutionInput): {
   const snapshot = extractDecisionSnapshot(state, heroId);
   const publicTimeline = extractPublicTimelineForState(state);
   const assumptionsCtx = assumptionsContextFromSnapshot(snapshot);
-  const potOdds = calculatePotOddsFromSnapshot(snapshot);
+
 
   const contestingSeats = state.seats.filter(
     (s) => s.playerId !== heroId && s.status !== 'folded',
@@ -432,6 +432,8 @@ export function buildDrillSpotSolution(input: BuildDrillSpotSolutionInput): {
     snapshot.callAmount,
     primaryRivalPlayerId,
   );
+  const eligibleBeforeCall = rawSlices.filter((slice) => slice.heroEligible).reduce((sum, slice) => sum + slice.potBeforeCall, 0);
+  const potOdds = calculatePotOdds({ potBeforeCall: eligibleBeforeCall, callAmount: snapshot.callAmount });
   const perPotEquity: PotSliceEquityBreakdown[] = [];
   const multiPotEvInputs: MultiPotEvSliceInput[] = [];
   let mainEquityResult: EquityResult | null = null;
@@ -954,6 +956,7 @@ export function buildDrillSpotSolution(input: BuildDrillSpotSolutionInput): {
     `Street: ${snapshot.street.toUpperCase()} · Pot trước quyết định: ${snapshot.potBeforeCall} điểm · Cap street: ${snapshot.streetCap} điểm.`,
     `Stack Hero (${heroId}): ${snapshot.heroStack} điểm (đã góp trong street: ${snapshot.heroStreetContribution}, tổng góp cả ván: ${snapshot.heroTotalContribution}).`,
     `Số đối thủ còn tranh pot: ${snapshot.activeOpponentCount} (${contestingSeats.map((s) => `${s.playerId}=${rivalSeats[s.playerId]?.name ?? s.playerId}: stack ${chipValue(s.stack)}`).join(', ')}).`,
+    ...(snapshot.currentBet > 0 ? ['Khi đối mặt cược, giả định những người chưa theo mức cược hiện tại sẽ không tiếp tục; người all-in vẫn tranh các phần pot đủ điều kiện. Không cộng thêm chip từ hành động tương lai.'] : ['Pot hiển thị gồm toàn bộ chip đã góp; equity xét những người còn tranh từng phần pot.']),
     `Vị trí & thứ tự lượt (người mở lời ván: ${snapshot.position.openerPlayerId}): ${snapshot.position.label ?? ''}.`,
     ...rivalRangeSummaries.map((r) => `Range ${r.name} (${r.playerId} — ${r.publicActionVi}): ${r.comboCount} combo hợp lệ — ${r.descriptionVi}`),
   ];
@@ -998,7 +1001,7 @@ export function buildDrillSpotSolution(input: BuildDrillSpotSolutionInput): {
         : `Gợi ý Bước 4 (% trúng tới river): Ở turn chỉ còn 1 lá river nên % tới river chính bằng % trúng 1 lá (${expectedOuts}/${unseenCards} ≈ ${ruleOf2Percent ?? 0}%).`,
     'pot-odds':
       snapshot.callAmount > 0
-        ? `Gợi ý Bước 5 (Pot odds / Equity cần): Khoản phải call / (Pot hiện tại + Khoản phải call) = ${snapshot.callAmount} / (${snapshot.potBeforeCall} + ${snapshot.callAmount}) = ${snapshot.callAmount}/${snapshot.potBeforeCall + snapshot.callAmount} (${potOdds.potToCallLabel}).`
+        ? `Gợi ý Bước 5 (Pot odds / Equity cần): Khoản phải call / (Pot hiện tại + Khoản phải call) = ${snapshot.callAmount} / (${potOdds.potBeforeCall} + ${snapshot.callAmount}) = ${snapshot.callAmount}/${potOdds.potAfterCall} (${potOdds.potToCallLabel}).`
         : 'Gợi ý Bước 5 (Pot odds): Chưa ai bet (khoản cần call = 0), nên equity cần để xem tiếp = 0%.',
     action: `Gợi ý Bước 6 (Hành động & Chip vật lý): Equity của bạn trước range ${primaryMeta.name} là ~${formatPctVi(effectiveEquity, 1)} so với pot odds ${formatPctVi(potOdds.requiredEquity, 1)}. Hãy bấm đúng mệnh giá chip vật lý (5/10/50/100) khớp khoản cược và xác nhận hành động.`,
   });

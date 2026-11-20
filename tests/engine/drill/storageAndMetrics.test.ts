@@ -331,6 +331,10 @@ describe('P3 Drill — Metrics M1–M4, level-up suggestion D7, and resilient ve
     const twentyAt80 = Array.from({ length: 20 }, (_, i) =>
       makeAttemptFixture({ level: 1, isDecisionCorrect: i < 16 }, i + 1),
     );
+    const noLevel2Attempts = evaluateLevelUpSuggestion(twentyAt80, 2);
+    expect(noLevel2Attempts.recentAttemptCount).toBe(0);
+    expect(noLevel2Attempts.shouldSuggestLevelUp).toBe(false);
+
     const sug80 = evaluateLevelUpSuggestion(twentyAt80, 1);
     expect(sug80.recentAttemptCount).toBe(20);
     expect(sug80.recentCorrectCount).toBe(16);

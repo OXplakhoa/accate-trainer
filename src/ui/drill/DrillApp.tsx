@@ -50,6 +50,7 @@ import {
   type DrillSpot,
   type Level1StepId,
 } from '../../engine/drill';
+import { readAttemptClock } from './clock';
 import { LessonView } from './LessonView';
 import { ProgressView } from './ProgressView';
 import { DrillSoundController } from './sound';
@@ -163,7 +164,7 @@ export function DrillApp(props: DrillAppProps) {
     () => props.defaultConcept ?? initialLoad.state.lastSelectedConcept,
   );
   const [selectedSourceMode, setSelectedSourceMode] = useState<'generated' | DrillFixtureId>(
-    'h1-step7',
+    'generated',
   );
   const [seedCounter, setSeedCounter] = useState<number>(1);
   const [muted, setMuted] = useState<boolean>(false);
@@ -172,11 +173,7 @@ export function DrillApp(props: DrillAppProps) {
   // Build initial spot (either from Sandbox `initialSpot` prop or canonical H1 #7 / concept spot)
   const [currentSpot, setCurrentSpot] = useState<DrillSpot>(() => {
     if (props.initialSpot !== undefined) {
-      return createDrillSpotFromHandState({
-        hand: props.initialSpot.hand,
-        heroId: props.initialSpot.heroId,
-        conceptId: props.defaultConcept ?? 'ev-comparison',
-      });
+      try { return createDrillSpotFromHandState({ hand: props.initialSpot.hand, heroId: props.initialSpot.heroId, conceptId: props.defaultConcept ?? 'ev-comparison' }); } catch { return buildFixtureDrillSpot('h1-step7'); }
     }
     return buildFixtureDrillSpot('h1-step7');
   });
@@ -202,7 +199,11 @@ export function DrillApp(props: DrillAppProps) {
   const [boardTextureChoice, setBoardTextureChoice] = useState<BoardTextureClass | ''>('');
 
   // UI-layer clock for tracking response time & Level 3 countdown
-  const spotStartTimeRef = useRef<number>(0);
+  const spotStartTimeRef = useRef<number>(safeNowMs());
+  const attemptDurationRef = useRef(persistedState.clockSeconds);
+  const submittedRef = useRef(false);
+  const initialSpotRef = useRef(props.initialSpot);
+  const [initialSpotError, setInitialSpotError] = useState(() => props.initialSpot !== undefined && (props.initialSpot.hand.phase !== 'betting' || props.initialSpot.hand.activePlayerId !== props.initialSpot.heroId || !props.initialSpot.hand.seats.some(s => s.playerId === props.initialSpot!.heroId && s.status === 'active')));
   const [remainingSeconds, setRemainingSeconds] = useState<number>(persistedState.clockSeconds);
 
   const resetInputsForSpot = useCallback(
@@ -220,26 +221,24 @@ export function DrillApp(props: DrillAppProps) {
       setL2PotOddsStr('');
       setBoardTextureChoice('');
       spotStartTimeRef.current = safeNowMs();
+      attemptDurationRef.current = persistedState.clockSeconds;
+      submittedRef.current = false;
       setRemainingSeconds(persistedState.clockSeconds);
     },
     [persistedState.clockSeconds],
   );
 
-  // Re-sync when `props.initialSpot` changes from Sandbox
   useEffect(() => {
-    if (props.initialSpot !== undefined) {
-      const nextSpot = createDrillSpotFromHandState({
-        hand: props.initialSpot.hand,
-        heroId: props.initialSpot.heroId,
-        conceptId: selectedConcept,
-      });
+    if (props.initialSpot === initialSpotRef.current) return;
+    initialSpotRef.current = props.initialSpot;
+    if (props.initialSpot === undefined) return;
+    try {
+      const nextSpot = createDrillSpotFromHandState({ hand: props.initialSpot.hand, heroId: props.initialSpot.heroId, conceptId: selectedConcept });
+      setInitialSpotError(false);
       setCurrentSpot(nextSpot);
-      const targetLvl: ActiveDrillLevel = selectedLevel === 0 ? 1 : selectedLevel;
-      if (selectedLevel === 0) {
-        setSelectedLevel(1);
-      }
-      resetInputsForSpot(nextSpot, targetLvl);
-    }
+      if (selectedLevel === 0) setSelectedLevel(1);
+      resetInputsForSpot(nextSpot, selectedLevel === 0 ? 1 : selectedLevel);
+    } catch { setInitialSpotError(true); }
   }, [props.initialSpot, resetInputsForSpot, selectedConcept, selectedLevel]);
 
   const loadNewSpot = useCallback(
@@ -257,6 +256,7 @@ export function DrillApp(props: DrillAppProps) {
             })
           : buildFixtureDrillSpot(mode, undefined, concept);
 
+      setInitialSpotError(false);
       setCurrentSpot(nextSpot);
       const activeLvl: ActiveDrillLevel = targetLevel === 0 ? 1 : targetLevel;
       resetInputsForSpot(nextSpot, activeLvl);
@@ -290,68 +290,33 @@ export function DrillApp(props: DrillAppProps) {
     loadNewSpot(val, selectedConcept, nextCount, selectedLevel);
   };
 
-  // Level 3 countdown timer in UI layer
+  const timerStateRef = useRef({ currentSpot, session, boardTextureChoice, persistedState });
+  timerStateRef.current = { currentSpot, session, boardTextureChoice, persistedState };
   useEffect(() => {
-    if (
-      activeTab !== 'drill' ||
-      selectedLevel !== 3 ||
-      session.phase !== 'answering'
-    ) {
-      return;
-    }
-
-    const totalSec = persistedState.clockSeconds;
-    setRemainingSeconds(totalSec);
-    const startTs = safeNowMs();
-    spotStartTimeRef.current = startTs;
-
+    if (activeTab !== 'drill' || selectedLevel !== 3 || session.phase !== 'answering') return;
     const timerId = window.setInterval(() => {
-      const nowTs = safeNowMs();
-      const elapsedMs = Math.max(0, nowTs - startTs);
-      const leftSec = Math.max(0, Math.ceil(totalSec - elapsedMs / 1000));
+      const { elapsedMs, remainingSeconds: leftSec } = readAttemptClock(spotStartTimeRef.current, attemptDurationRef.current, safeNowMs());
       setRemainingSeconds(leftSec);
-
-      if (leftSec > 0 && leftSec <= 3) {
-        soundRef.current?.play({ kind: 'tick' }, `tick:${currentSpot.spotId}:${leftSec}`);
-      }
-
-      if (elapsedMs >= totalSec * 1000) {
+      const latest = timerStateRef.current;
+      if (leftSec > 0 && leftSec <= 3) soundRef.current?.play({ kind: 'tick' }, `tick:${latest.currentSpot.spotId}:${leftSec}`);
+      if (leftSec === 0 && !submittedRef.current) {
+        submittedRef.current = true;
         window.clearInterval(timerId);
-        // Auto-act on timeout (D36: check if legal, else fold; unconfirmed chips returned to stack)
         setSelectedChips(emptyChips());
         setChipHistory([]);
-        const timeoutAction = resolveLevel3TimeoutAction(currentSpot);
-        const res = submitLevel3Decision(session, {
-          action: timeoutAction,
-          responseTimeMs: totalSec * 1000,
-          timedOut: true,
-          ...(boardTextureChoice !== '' ? { boardTexture: boardTextureChoice } : {}),
-          sequenceIndex: persistedState.nextSequenceIndex,
-          autoCompleteHand: true,
+        const res = submitLevel3Decision(latest.session, {
+          action: resolveLevel3TimeoutAction(latest.currentSpot), responseTimeMs: Math.round(elapsedMs), timedOut: true,
+          ...(latest.boardTextureChoice !== '' ? { boardTexture: latest.boardTextureChoice } : {}),
+          sequenceIndex: latest.persistedState.nextSequenceIndex, autoCompleteHand: true,
         });
         if (res.ok) {
           setSession(res.session);
-          if (res.session.attemptRecord !== null) {
-            persistState(recordCompletedAttempt(persistedState, res.session.attemptRecord));
-          }
-          soundRef.current?.play(
-            { kind: res.session.postHandFeedback?.isDecisionCorrect ? 'correct' : 'incorrect' },
-            `timeout-done:${currentSpot.spotId}`,
-          );
+          if (res.session.attemptRecord !== null) persistState(recordCompletedAttempt(latest.persistedState, res.session.attemptRecord));
         }
       }
     }, 250);
-
     return () => window.clearInterval(timerId);
-  }, [
-    activeTab,
-    boardTextureChoice,
-    currentSpot,
-    persistState,
-    persistedState,
-    selectedLevel,
-    session,
-  ]);
+  }, [activeTab, selectedLevel, session.phase, persistState]);
 
   const heroSeat = useMemo(
     () => currentSpot.handState.seats.find((s) => s.playerId === currentSpot.heroId)!,
@@ -592,7 +557,7 @@ export function DrillApp(props: DrillAppProps) {
 
     const elapsedMs = computeElapsedMs();
 
-    if (boardTextureChoice === '') {
+    if (selectedLevel !== 3 && currentSpot.snapshot.street !== 'preflop' && boardTextureChoice === '') {
       setActionErrorVi('Hãy chọn đặc điểm mặt bài trước khi chọn hành động.');
       return;
     }
@@ -601,7 +566,7 @@ export function DrillApp(props: DrillAppProps) {
       const res = submitLevel1Step(session, {
         stepId: 'action',
         action: built.action,
-        boardTexture: boardTextureChoice,
+        ...(boardTextureChoice !== '' ? { boardTexture: boardTextureChoice } : {}),
         responseTimeMs: elapsedMs,
         sequenceIndex: persistedState.nextSequenceIndex,
         autoCompleteHand: true,
@@ -623,39 +588,28 @@ export function DrillApp(props: DrillAppProps) {
     }
 
     if (selectedLevel === 2) {
-      const outsVal = Number(l2OutsStr.trim().replace(',', '.'));
-      const turnPctVal =
-        l2TurnPctStr.trim() !== ''
-          ? Number(l2TurnPctStr.trim().replace(',', '.'))
-          : undefined;
-      const riverPctVal = Number(l2RiverPctStr.trim().replace(',', '.'));
-      const potOddsVal = Number(l2PotOddsStr.trim().replace(',', '.'));
-
-      if (
-        l2OutsStr.trim() === '' ||
-        l2TurnPctStr.trim() === '' ||
-        turnPctVal === undefined || !Number.isFinite(turnPctVal) ||
-        l2RiverPctStr.trim() === '' ||
-        l2PotOddsStr.trim() === '' ||
-        Number.isNaN(outsVal) ||
-        Number.isNaN(riverPctVal) ||
-        Number.isNaN(potOddsVal)
-      ) {
-        setActionErrorVi(
-          'Ở Cấp 2 (Tự giải), vui lòng nhập đủ Số Outs, % trúng tới River và Pot Odds (%) trước khi xác nhận hành động.',
-        );
+      const hasDraw = currentSpot.snapshot.street === 'flop' || currentSpot.snapshot.street === 'turn';
+      const isFlop = currentSpot.snapshot.street === 'flop';
+      const parse = (value: string) => value.trim() === '' ? undefined : Number(value.trim().replace(',', '.'));
+      const outsVal = parse(l2OutsStr);
+      const turnPctVal = parse(l2TurnPctStr);
+      const riverPctVal = parse(l2RiverPctStr);
+      const potOddsVal = parse(l2PotOddsStr);
+      if ((hasDraw && (outsVal === undefined || !Number.isFinite(outsVal) || turnPctVal === undefined || !Number.isFinite(turnPctVal))) ||
+          (isFlop && (riverPctVal === undefined || !Number.isFinite(riverPctVal))) || potOddsVal === undefined || !Number.isFinite(potOddsVal)) {
+        setActionErrorVi('Vui lòng nhập đầy đủ các số được yêu cầu trước khi xác nhận hành động.');
         return;
       }
 
       // First enter 'action-submitted' so ONLY the 1-line summary is shown (AC D2)
       const res = submitLevel2Decision(session, {
-        outs: outsVal,
+        ...(hasDraw && outsVal !== undefined ? { outs: outsVal } : {}),
         ...(turnPctVal !== undefined && !Number.isNaN(turnPctVal)
           ? { turnPercent: turnPctVal }
           : {}),
-        riverPercent: riverPctVal,
+        ...(isFlop && riverPctVal !== undefined ? { riverPercent: riverPctVal } : {}),
         potOddsPercent: potOddsVal,
-        boardTexture: boardTextureChoice,
+        ...(boardTextureChoice !== '' ? { boardTexture: boardTextureChoice } : {}),
         action: built.action,
         responseTimeMs: elapsedMs,
         sequenceIndex: persistedState.nextSequenceIndex,
@@ -678,11 +632,12 @@ export function DrillApp(props: DrillAppProps) {
     }
 
     if (selectedLevel === 3) {
+      if (submittedRef.current || elapsedMs >= attemptDurationRef.current * 1000) return;
       const res = submitLevel3Decision(session, {
         action: built.action,
         responseTimeMs: elapsedMs,
         timedOut: false,
-        boardTexture: boardTextureChoice,
+        ...(boardTextureChoice !== '' ? { boardTexture: boardTextureChoice } : {}),
         sequenceIndex: persistedState.nextSequenceIndex,
         autoCompleteHand: true,
       });
@@ -690,6 +645,7 @@ export function DrillApp(props: DrillAppProps) {
         setActionErrorVi(res.message);
         return;
       }
+      submittedRef.current = true;
       setSession(res.session);
       setActionErrorVi(null);
       if (res.session.attemptRecord !== null) {
@@ -763,6 +719,7 @@ export function DrillApp(props: DrillAppProps) {
       <style>{DRILL_SCOPED_CSS}</style>
 
       <div className="drill-shell">
+        {initialSpotError ? <div role="alert" className="drill-banner drill-banner-warn">Không thể luyện tình huống này: cần đến lượt Hero trong vòng cược. Hãy chọn tình huống mới hoặc quay lại Sandbox.</div> : null}
         {/* Top Bar */}
         <header className="drill-topbar">
           <div className="drill-brand">
@@ -847,9 +804,11 @@ export function DrillApp(props: DrillAppProps) {
             onStartPractice={(lvl, cid) => {
               setActiveTab('drill');
               if (cid !== undefined) {
-                setSelectedConcept(cid);
-              }
-              handleSelectLevel(lvl);
+                setSelectedConcept(cid); setSelectedLevel(lvl); setSelectedSourceMode('generated');
+                persistState(updateDrillPreferences(persistedState, { lastSelectedConcept: cid, lastSelectedLevel: lvl }));
+                const nextCount = seedCounter + 1; setSeedCounter(nextCount);
+                loadNewSpot('generated', cid, nextCount, lvl);
+              } else { handleSelectLevel(lvl); }
             }}
             onResetProgress={() => {
               const clean = createInitialDrillPersistedState();
@@ -924,7 +883,6 @@ export function DrillApp(props: DrillAppProps) {
                         onChange={(e) => {
                           const sec = Number(e.target.value) as 10 | 15 | 20 | 25;
                           persistState(updateDrillPreferences(persistedState, { clockSeconds: sec }));
-                          setRemainingSeconds(sec);
                         }}
                       >
                         {([10, 15, 20, 25] as const).map((s) => (
@@ -981,6 +939,12 @@ export function DrillApp(props: DrillAppProps) {
                     hidePrompt={session.phase !== 'hand-completed'}
                   />
 
+                  <section className="drill-feedback-card" aria-label="Lịch sử hành động công khai">
+                    <strong>Lịch sử hành động công khai</strong>
+                    {currentSpot.publicTimeline.filter(e => e.type === 'player-action' || e.type === 'out-of-turn-declared' || e.type === 'out-of-turn-cancelled').map((e, i) => (
+                      <div key={i}>{'street' in e ? e.street.toUpperCase() : ''} · {'playerId' in e ? e.playerId : ''} · {'action' in e ? e.action.type.toUpperCase() : ''}{e.type === 'out-of-turn-declared' ? ' (ngoài lượt)' : e.type === 'out-of-turn-cancelled' ? ' (hủy ngoài lượt)' : ''}{e.type === 'player-action' && e.addedAmount > 0 ? ` ${e.addedAmount}` : ''}</div>
+                    ))}
+                  </section>
                   {/* Physical Chip Selection Tray (Hero clicks individual chips, D19, C2, C3) */}
                   <section
                     className="drill-hero-zone"
@@ -1305,7 +1269,7 @@ export function DrillApp(props: DrillAppProps) {
                         Câu hỏi Outs: {(currentSpot.fixtureId === 'dirty-outs-flop-oesd' ? 'Có bao nhiêu clean outs thắng sạch trước range của Đá?' : currentSpot.outsQuestionPromptVi)}
                       </div>
                       <div className="drill-field-grid">
-                        <div className="drill-field">
+                        {(currentSpot.snapshot.street === 'flop' || currentSpot.snapshot.street === 'turn') ? <><div className="drill-field">
                           <label htmlFor="l2-outs" className="drill-label">
                             Số Outs (lá)
                           </label>
@@ -1321,7 +1285,7 @@ export function DrillApp(props: DrillAppProps) {
                         </div>
                         <div className="drill-field">
                           <label htmlFor="l2-turn-pct" className="drill-label">
-                            % Trúng 1 lá (Turn)
+                            % Trúng 1 lá ({currentSpot.snapshot.street === 'turn' ? 'River' : 'Turn'})
                           </label>
                           <input
                             id="l2-turn-pct"
@@ -1334,7 +1298,8 @@ export function DrillApp(props: DrillAppProps) {
                             onChange={(e) => setL2TurnPctStr(e.target.value)}
                           />
                         </div>
-                        <div className="drill-field">
+                        </> : null}
+                        {currentSpot.snapshot.street === 'flop' ? <div className="drill-field">
                           <label htmlFor="l2-river-pct" className="drill-label">
                             % Trúng tới River
                           </label>
@@ -1349,6 +1314,7 @@ export function DrillApp(props: DrillAppProps) {
                             onChange={(e) => setL2RiverPctStr(e.target.value)}
                           />
                         </div>
+                        : null}
                         <div className="drill-field">
                           <label htmlFor="l2-pot-odds" className="drill-label">
                             Pot Odds / Equity cần (%)
@@ -1381,7 +1347,7 @@ export function DrillApp(props: DrillAppProps) {
                           gap: 8,
                         }}
                       >
-                        <label htmlFor="drill-board-texture-select" className="drill-label">
+                        {currentSpot.snapshot.street !== 'preflop' ? <><label htmlFor="drill-board-texture-select" className="drill-label">
                           Đọc đặc điểm mặt bài:
                         </label>
                         <select
@@ -1396,7 +1362,7 @@ export function DrillApp(props: DrillAppProps) {
                           <option value="dry">Dry (Mặt bài khô)</option>
                           <option value="wet">Wet (Mặt bài ướt)</option>
                           <option value="draw-heavy">Nhiều draw (Draw-heavy)</option>
-                        </select>
+                        </select></> : null}
                       </div>
 
                       {/* Legal Action Buttons (Enforcing engine legalActions & physical chip matching!) */}

@@ -202,7 +202,7 @@ export function evaluateLevel1NumericStep(
       );
       const exactVi = formatPctVi(solution.potOdds.requiredEquity, 1);
       const ratioDetail = solution.potOdds.hasCall
-        ? `${snapshot.callAmount} / (${snapshot.potBeforeCall} + ${snapshot.callAmount}) = ${snapshot.callAmount}/${solution.potOdds.potAfterCall} = ${exactVi} (${solution.potOdds.potToCallLabel})`
+        ? `${snapshot.callAmount} / (${solution.potOdds.potBeforeCall} + ${snapshot.callAmount}) = ${snapshot.callAmount}/${solution.potOdds.potAfterCall} = ${exactVi} (${solution.potOdds.potToCallLabel})`
         : '0% (không cần call)';
       const feedbackVi = potOddsMetric.withinTarget
         ? `Bước 5 (Pot odds / Equity cần): Đúng (sai số ${potOddsMetric.absoluteErrorPp.toFixed(1).replace('.', ',')} điểm % ≤ 3%)! Equity cần = ${ratioDetail}.`
@@ -587,9 +587,9 @@ export function submitLevel1Step(
 export function submitLevel2Decision(
   session: DrillSessionState,
   input: {
-    readonly outs: number;
+    readonly outs?: number;
     readonly turnPercent?: number;
-    readonly riverPercent: number;
+    readonly riverPercent?: number;
     readonly potOddsPercent: number;
     readonly unseenCards?: number;
     readonly boardTexture?: BoardTextureClass;
@@ -617,14 +617,10 @@ export function submitLevel2Decision(
     };
   }
 
-  const outsEval = evaluateLevel1NumericStep(session.spot, 'outs', input.outs);
-  if (!outsEval.ok) {
-    return { ok: false, code: outsEval.code, message: outsEval.message, session };
-  }
-  const riverEval = evaluateLevel1NumericStep(session.spot, 'river-percent', input.riverPercent);
-  if (!riverEval.ok) {
-    return { ok: false, code: riverEval.code, message: riverEval.message, session };
-  }
+  const outsEval = input.outs === undefined ? undefined : evaluateLevel1NumericStep(session.spot, 'outs', input.outs);
+  if (outsEval !== undefined && !outsEval.ok) return { ok: false, code: outsEval.code, message: outsEval.message, session };
+  const riverEval = input.riverPercent === undefined ? undefined : evaluateLevel1NumericStep(session.spot, 'river-percent', input.riverPercent);
+  if (riverEval !== undefined && !riverEval.ok) return { ok: false, code: riverEval.code, message: riverEval.message, session };
   const potOddsEval = evaluateLevel1NumericStep(session.spot, 'pot-odds', input.potOddsPercent);
   if (!potOddsEval.ok) {
     return { ok: false, code: potOddsEval.code, message: potOddsEval.message, session };
@@ -656,10 +652,10 @@ export function submitLevel2Decision(
 
   const { postHandFeedback, stateAfterHeroAction } = completion;
   const nextInputs: DrillSessionInputs = Object.freeze({
-    outs: input.outs,
+    ...(input.outs !== undefined ? { outs: input.outs } : {}),
     ...(input.unseenCards !== undefined ? { unseenCards: input.unseenCards } : {}),
     ...(input.turnPercent !== undefined ? { turnPercent: input.turnPercent } : {}),
-    riverPercent: input.riverPercent,
+    ...(input.riverPercent !== undefined ? { riverPercent: input.riverPercent } : {}),
     potOddsPercent: input.potOddsPercent,
     ...(input.boardTexture !== undefined ? { boardTexture: input.boardTexture } : {}),
   });
@@ -674,9 +670,9 @@ export function submitLevel2Decision(
   });
 
   const stepFeedbacks = Object.freeze({
-    outs: outsEval.evaluation,
+    ...(outsEval?.ok ? { outs: outsEval.evaluation } : {}),
     ...(turnEval !== undefined ? { 'turn-percent': turnEval } : {}),
-    'river-percent': riverEval.evaluation,
+    ...(riverEval?.ok ? { 'river-percent': riverEval.evaluation } : {}),
     'pot-odds': potOddsEval.evaluation,
     action: actionEval,
   });

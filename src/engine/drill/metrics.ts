@@ -76,7 +76,7 @@ export function evaluateLevelUpSuggestion(
   }
 
   const levelAttempts = attempts.filter((a) => a.level === currentLevel);
-  const pool = levelAttempts.length >= LEVEL_UP_WINDOW_SIZE ? levelAttempts : attempts;
+  const pool = levelAttempts;
   const recentWindow = pool.slice(-LEVEL_UP_WINDOW_SIZE);
   const recentAttemptCount = recentWindow.length;
   const recentCorrectCount = recentWindow.filter((a) => a.isDecisionCorrect).length;

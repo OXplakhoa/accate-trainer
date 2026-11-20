@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertDrillHandInvariants,
+  createDrillSession,
+  submitLevel2Decision,
   buildFixtureDrillSpot,
   completeDrillHand,
   createDrillSpotFromHandState,
@@ -11,6 +13,9 @@ import {
   selectPhysicalChipsForAmount,
 } from '../../../src/engine/drill';
 import {
+  addChips,
+  subtractChips,
+  initialDistribution,
   checkHandInvariants,
   checkInv1,
   chipValue,
@@ -20,6 +25,8 @@ import {
   type ChipCounts,
   type HandState,
 } from '../../../src/engine';
+import { betAction, callAction, mustApply, mustStartHand } from '../handTestHelpers';
+import { readAttemptClock } from '../../../src/ui/drill/clock';
 import {
   buildD8TurnState,
   buildH1DecisionStates,
@@ -223,6 +230,50 @@ describe('P3 Drill — Spot generation, canonical fixtures, H1 #7, D5, D6, D8, a
     expect(p1Spot.solution.perPotEquity).toHaveLength(2);
     expect(p1Spot.solution.perPotEquity[0]!.potAfterCall).toBe(110);
     expect(p1Spot.solution.perPotEquity[1]!.potAfterCall).toBe(40);
+  });
+
+  it('preserves all live opponents in the unopened D8 pot and legal sizing at the cap', () => {
+    const d8 = buildFixtureDrillSpot('d8-chase-draw', createRng('d8-live-players'), undefined, 200);
+    assertFullStateInvariants(d8.handState);
+    expect(d8.solution.perPotEquity[0]!.eligibleOpponentIds).toHaveLength(5);
+    const h1 = buildFixtureDrillSpot('h1-step13', createRng('h1-cap-sizing'), undefined, 200);
+    assertFullStateInvariants(h1.handState);
+    expect(h1.solution.sizingAnalysis.drawChaseAnalysis.opponentCallAmount).toBe(0);
+    expect(h1.solution.sizingAnalysis.drawChaseAnalysis.explanationVi).toContain('Không có Bet hoặc Raise');
+  });
+
+  it('uses only eligible pot slices for a short all-in call', () => {
+    const init = initialDistribution(4);
+    const short: ChipCounts = { 5: 1, 10: 2, 50: 0, 100: 0 };
+    let hand = mustStartHand({
+      seats: ['A', 'B', 'C', 'D'].map(playerId => ({ playerId, stack: playerId === 'C' ? short : init.perPlayer })),
+      bank: addChips(init.bank, subtractChips(init.perPlayer, short)),
+      rng: createRng('eligible-short-call'), config: { dealerIndex: 3 }, fixtures: { openerId: 'D' },
+    }).state;
+    assertFullStateInvariants(hand);
+    hand = mustApply(hand, 'D', { type: 'fold' }).state; assertFullStateInvariants(hand);
+    hand = mustApply(hand, 'A', betAction(hand, 'A', 50)).state; assertFullStateInvariants(hand);
+    hand = mustApply(hand, 'B', callAction(hand, 'B')).state; assertFullStateInvariants(hand);
+    const spot = createDrillSpotFromHandState({ hand, heroId: 'C', conceptId: 'pot-odds', equitySamples: 200 });
+    expect(spot.snapshot.potBeforeCall).toBe(120);
+    expect(spot.snapshot.callAmount).toBe(20);
+    expect(spot.solution.potOdds.potAfterCall).toBe(80);
+    expect(spot.solution.potOdds.requiredEquity).toBeCloseTo(0.25);
+    expect(spot.solution.actionEvs.multiPotCallEv!.totalEligiblePotAfterCall).toBe(80);
+    const eligible = spot.solution.perPotEquity.filter(p => p.heroEligible);
+    const weighted = eligible.reduce((sum, p) => sum + p.expectedReturn, 0) / 80;
+    expect(spot.solution.effectiveEquity).toBeCloseTo(weighted);
+    const result = submitLevel2Decision(createDrillSession(spot, 2), { potOddsPercent: 25, action: callAction(hand, 'C') });
+    expect(result.ok).toBe(true);
+    if (result.ok) { assertFullStateInvariants(result.session.stateAfterHeroAction!); expect(result.session.inputs.outs).toBeUndefined(); }
+  });
+
+  it('reads the same fixed deadline after unrelated state changes', () => {
+    const start = 1000;
+    expect(readAttemptClock(start, 10, 4500)).toEqual({ elapsedMs: 3500, remainingSeconds: 7 });
+    // Choosing a texture or exchanging chips does not alter either clock input.
+    expect(readAttemptClock(start, 10, 7000)).toEqual({ elapsedMs: 6000, remainingSeconds: 4 });
+    expect(readAttemptClock(start, 10, 11250)).toEqual({ elapsedMs: 10250, remainingSeconds: 0 });
   });
 
   it('generates valid live spots via M1 + M2 for every concept, falls back cleanly when maxAttempts is 0, and supports Sandbox initialSpot & chip exchange', () => {

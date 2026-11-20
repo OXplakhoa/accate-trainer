@@ -493,6 +493,9 @@ export function createDrillSpotFromHandState(input: {
   readonly nongTiltState?: NongTiltState;
   readonly equitySamples?: number;
 }): DrillSpot {
+  if (input.hand.phase !== 'betting' || input.hand.activePlayerId !== input.heroId || !input.hand.seats.some((seat) => seat.playerId === input.heroId && seat.status === 'active')) {
+    throw new Error('Drill requires an active betting decision for Hero.');
+  }
   const seed = input.seed ?? `sandbox:${input.hand.rngSeed}:${input.hand.timeline.length}`;
   const rng = createRng(seed);
   const nongTiltState = input.nongTiltState ?? createInitialNongTiltState();
@@ -920,7 +923,7 @@ export function completeDrillHand(
   const equityVsRangeLineVi = `Equity trước range đối thủ: ${formatPctVi(solution.effectiveEquity, 1)} (Thắng ${formatPctVi(solution.equityResult.winRate, 1)} · Chia hòa ${formatPctVi(solution.equityResult.tieEquityShare, 1)}). ${solution.contestingRanges.map((r) => r.descriptionVi).join(' ')}`;
 
   const potOddsLineVi = solution.potOdds.hasCall
-    ? `Pot odds (Equity cần): ${snapshot.callAmount} / (${snapshot.potBeforeCall} + ${snapshot.callAmount}) = ${snapshot.callAmount}/${solution.potOdds.potAfterCall} = ${formatPctVi(solution.potOdds.requiredEquity, 1)} (tỷ lệ pot-to-call ${snapshot.potBeforeCall}/${snapshot.callAmount} = ${solution.potOdds.potToCallLabel}).`
+    ? `Pot odds (Equity cần): ${snapshot.callAmount} / (${solution.potOdds.potBeforeCall} + ${snapshot.callAmount}) = ${snapshot.callAmount}/${solution.potOdds.potAfterCall} = ${formatPctVi(solution.potOdds.requiredEquity, 1)} (tỷ lệ pot-to-call ${solution.potOdds.potBeforeCall}/${snapshot.callAmount} = ${solution.potOdds.potToCallLabel}).`
     : `Pot odds: Không phải call (0 / ${snapshot.potBeforeCall} = 0%).`;
 
   const evAndClearSpotLineVi = !solution.potOdds.hasCall ? `${solution.actionEvs.explanationVi} Không có lựa chọn Call nên không tính chỉ số Call/Fold.` : `${solution.actionEvs.explanationVi} Chênh lệch |Equity − Equity cần| = ${solution.clearSpot.marginPp.toFixed(1).replace('.', ',')} điểm % (${solution.clearSpot.isClearSpot ? 'Spot rõ ràng > 5 điểm %' : 'Spot sát nút ≤ 5 điểm %, không tính phạt vào chỉ số spot rõ'}).`;

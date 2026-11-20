@@ -603,9 +603,9 @@ export function buildFixtureDrillSpot(
         fixtureId: 'dirty-outs-flop-oesd',
         titleVi: 'Đếm Clean Outs & Trừ Outs Bẩn — Mua Thùng trên Flop K♥ 7♥ Q♣ trước Đá',
         promptVi:
-          'Bạn cầm A♥ 9♥ trên flop K♥ 7♥ Q♣. Đá (Tight-passive) bet 30, hai người khác đã fold. Bạn có 9 lá cơ chưa lật, nhưng lá Q♥ sẽ ghép đôi Q♣ trên bàn (giúp KQ/KK/77 trong range của Đá lên Cù lũ — dirty/mixed out!). Hãy đếm đúng số clean outs thắng sạch trước range của Đá (Hopkins L2 slide 24–27).',
+          'Bạn cầm A♥ 9♥ trên flop K♥ 7♥ Q♣. Đá (Tight-passive) bet 30, hai người khác đã fold. Hãy đếm số clean outs thắng sạch trước range của Đá (Hopkins L2 slide 24–27).',
         outsQuestionPromptVi:
-          'Sau khi trừ lá Q♥ (dirty/mixed out vì ghép đôi Q♣ trên bàn), bạn có bao nhiêu clean outs thắng sạch 100% trước range của Đá?',
+          'Bạn có bao nhiêu clean outs thắng sạch trước range của Đá?',
         handState: state,
         heroId: 'C',
         rivalSeats,
