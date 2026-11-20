@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   addChips,
   chipValue,
@@ -200,6 +200,7 @@ export function DrillApp(props: DrillAppProps) {
 
   // UI-layer clock for tracking response time & Level 3 countdown
   const spotStartTimeRef = useRef<number>(safeNowMs());
+  const pausedAtRef = useRef<number | null>(null);
   const attemptDurationRef = useRef(persistedState.clockSeconds);
   const submittedRef = useRef(false);
   const initialSpotRef = useRef(props.initialSpot);
@@ -221,12 +222,26 @@ export function DrillApp(props: DrillAppProps) {
       setL2PotOddsStr('');
       setBoardTextureChoice('');
       spotStartTimeRef.current = safeNowMs();
+      pausedAtRef.current = null;
       attemptDurationRef.current = persistedState.clockSeconds;
       submittedRef.current = false;
       setRemainingSeconds(persistedState.clockSeconds);
     },
     [persistedState.clockSeconds],
   );
+
+  // Freeze attempt clock while hidden by App <Activity> mode switch; runs before passive initialSpot import/reset
+  useLayoutEffect(() => {
+    if (pausedAtRef.current !== null) {
+      spotStartTimeRef.current += Math.max(0, safeNowMs() - pausedAtRef.current);
+      pausedAtRef.current = null;
+    }
+    return () => {
+      if (pausedAtRef.current === null) {
+        pausedAtRef.current = safeNowMs();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (props.initialSpot === initialSpotRef.current) return;
