@@ -9,7 +9,7 @@ import tseslint from 'typescript-eslint';
 const nodeBuiltins = builtinModules.filter((m) => !m.startsWith('_') && !m.startsWith('node:'));
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'node_modules'] },
+  { ignores: ['dist', 'coverage', 'node_modules', '.handoff/**', '.worktrees/**'] },
   {
     extends: [js.configs.recommended],
     files: ['**/*.{js,mjs,cjs,jsx}'],
