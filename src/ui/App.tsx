@@ -1,9 +1,8 @@
+import { DrillApp } from './drill';
+import './app.css';
+
 export function App() {
-  return (
-    <main>
-      <h1>Accate Trainer</h1>
-    </main>
-  );
+  return <DrillApp />;
 }
 
 export default App;
