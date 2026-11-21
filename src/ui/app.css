@@ -5,6 +5,7 @@ body {
 
 .accate-mode-nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
   border-bottom: 1px solid #35493e;

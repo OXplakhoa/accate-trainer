@@ -217,6 +217,23 @@ export function SandboxApp({
     });
   }, [session.sessionSeed, session.phase, session.handNumber, session.hand]);
 
+  // Expose external controller API for P5 Tournament timeout (O1/O2) and timer audio channel (O5).
+  // Registered before deal animation lifecycle so controller.getState() is ready on reduced-motion mount.
+  useEffect(() => {
+    if (!onControllerReady) {
+      return;
+    }
+    onControllerReady({
+      autoTimeoutHeroAction: () => {
+        setSession((prev) => performHeroAutoTimeout(prev));
+      },
+      getState: () => sessionRef.current,
+      playTimerTick: (urgent?: boolean) => {
+        audioRef.current?.playTimerTick(urgent);
+      },
+    });
+  }, [onControllerReady]);
+
   // Observable deal / reveal animation lifecycle (O3 readiness for P5 Tournament)
   useEffect(() => {
     return syncDealAnimationLifecycle({
@@ -241,19 +258,6 @@ export function SandboxApp({
       setDealAnimState,
     });
   }, [dealKey, effectiveReducedMotion]);
-
-  // Expose external controller API for P5 Tournament timeout (O1/O2)
-  useEffect(() => {
-    if (!onControllerReady) {
-      return;
-    }
-    onControllerReady({
-      autoTimeoutHeroAction: () => {
-        setSession((prev) => performHeroAutoTimeout(prev));
-      },
-      getState: () => sessionRef.current,
-    });
-  }, [onControllerReady]);
 
   // Notify parent when Hero turn state changes
   const activeHand = session.phase === 'in-hand' ? session.hand : null;
@@ -559,6 +563,7 @@ export function SandboxApp({
 
   const canPracticeCurrentSpot =
     onPracticeSpot !== undefined &&
+    !disableMidHandFeedback &&
     activeHand !== null &&
     activeHand.phase === 'betting' &&
     heroSeat !== null &&
@@ -934,7 +939,7 @@ export function SandboxApp({
           appliedSettings={session.appliedSettings}
           pendingSettings={session.pendingSettings}
           isInHand={session.phase === 'in-hand' && session.hand?.phase === 'betting'}
-          hasPracticeSpotCallback={onPracticeSpot !== undefined}
+          hasPracticeSpotCallback={onPracticeSpot !== undefined && !disableMidHandFeedback}
           onApply={handleApplySettings}
           onTestAudio={handleTestAudio}
           onClose={() => {

@@ -4,24 +4,46 @@ import './app.css';
 
 const DrillApp = lazy(async () => ({ default: (await import('./drill')).DrillApp }));
 const SandboxApp = lazy(async () => ({ default: (await import('./sandbox')).SandboxApp }));
+const TournamentApp = lazy(async () => ({
+  default: (await import('./tournament')).TournamentApp,
+}));
 
-type PracticeSpot = { hand: HandState; heroId: string };
-type Mode = 'drill' | 'sandbox';
+type PracticeSource = 'sandbox' | 'tournament';
+type PracticeSpot = { hand: HandState; heroId: string; source: PracticeSource };
+type Mode = 'drill' | 'sandbox' | 'tournament';
 
 export function App() {
   const [mode, setMode] = useState<Mode>('drill');
   const [openedSandbox, setOpenedSandbox] = useState(false);
+  const [openedTournament, setOpenedTournament] = useState(false);
   const [practiceSpot, setPracticeSpot] = useState<PracticeSpot>();
 
-  const openPracticeSpot = useCallback((hand: HandState, heroId: string) => {
-    setPracticeSpot({ hand, heroId });
+  const openPracticeFromSandbox = useCallback((hand: HandState, heroId: string) => {
+    setPracticeSpot({ hand, heroId, source: 'sandbox' });
     setMode('drill');
   }, []);
 
-  function openSandbox() {
+  const openPracticeFromTournament = useCallback((hand: HandState, heroId: string) => {
+    setPracticeSpot({ hand, heroId, source: 'tournament' });
+    setMode('drill');
+  }, []);
+
+  const openSandbox = useCallback(() => {
     setOpenedSandbox(true);
     setMode('sandbox');
-  }
+  }, []);
+
+  const openTournament = useCallback(() => {
+    setOpenedTournament(true);
+    setMode('tournament');
+  }, []);
+
+  const backToTable =
+    practiceSpot === undefined
+      ? undefined
+      : practiceSpot.source === 'tournament'
+        ? openTournament
+        : openSandbox;
 
   return (
     <>
@@ -32,18 +54,26 @@ export function App() {
         <button type="button" aria-pressed={mode === 'sandbox'} onClick={openSandbox}>
           Bàn Sandbox
         </button>
+        <button type="button" aria-pressed={mode === 'tournament'} onClick={openTournament}>
+          Tournament
+        </button>
       </nav>
 
       <Suspense fallback={<p className="accate-app-status" role="status">Đang mở chế độ chơi…</p>}>
         <Activity mode={mode === 'drill' ? 'visible' : 'hidden'}>
-          <DrillApp
-            initialSpot={practiceSpot}
-            onBackToSandbox={practiceSpot ? openSandbox : undefined}
-          />
+          <DrillApp initialSpot={practiceSpot} onBackToSandbox={backToTable} />
         </Activity>
         {openedSandbox && (
           <Activity mode={mode === 'sandbox' ? 'visible' : 'hidden'}>
-            <SandboxApp onPracticeSpot={openPracticeSpot} />
+            <SandboxApp onPracticeSpot={openPracticeFromSandbox} />
+          </Activity>
+        )}
+        {openedTournament && (
+          <Activity mode={mode === 'tournament' ? 'visible' : 'hidden'}>
+            <TournamentApp
+              active={mode === 'tournament'}
+              onPracticeSpot={openPracticeFromTournament}
+            />
           </Activity>
         )}
       </Suspense>

@@ -185,6 +185,7 @@ export interface HeroTurnChangeInfo {
 export interface SandboxExternalApi {
   readonly autoTimeoutHeroAction: () => void;
   readonly getState: () => SandboxSessionState;
+  readonly playTimerTick?: (urgent?: boolean) => void;
 }
 
 export interface SandboxAppProps {
