@@ -27,11 +27,18 @@ function Prototype() {
   return (
     <div className="accate-drill-3d">
       <header className="ad3-masthead">
-        <h1><span>Accate</span> Luyện tập 3D</h1>
+        <h1>
+          <span>Accate</span> Luyện tập 3D
+        </h1>
       </header>
       <main className="ad3-workspace">
         <section className="ad3-table" aria-label="Bàn Accate">
-          <DrillScene phase={phase} highlight={highlight} spot={spot} reducedMotion={reducedMotion} />
+          <DrillScene
+            phase={phase}
+            highlight={highlight}
+            spot={spot}
+            reducedMotion={reducedMotion}
+          />
         </section>
         <section className="ad3-lesson" aria-label="Bài luyện nhẩm phần trăm">
           {entered ? (
@@ -45,7 +52,9 @@ function Prototype() {
             <div className="ad3-welcome">
               <h2>Nhẩm phần trăm tại bàn</h2>
               <p>Đếm outs, tính giá Call và quyết định trên cùng một tình huống.</p>
-              <button type="button" onClick={() => setEntered(true)}>Vào bàn luyện tập</button>
+              <button type="button" onClick={() => setEntered(true)}>
+                Vào bàn luyện tập
+              </button>
             </div>
           )}
         </section>
@@ -58,4 +67,8 @@ const root = document.getElementById('root');
 if (root === null) {
   throw new Error('Prototype mount point is missing.');
 }
-createRoot(root).render(<StrictMode><Prototype /></StrictMode>);
+createRoot(root).render(
+  <StrictMode>
+    <Prototype />
+  </StrictMode>,
+);

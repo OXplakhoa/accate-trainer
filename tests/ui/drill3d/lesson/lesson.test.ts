@@ -3,11 +3,21 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEMO_SPOTS } from '../../../../src/ui/drill3d/contract';
 import { DrillLesson } from '../../../../src/ui/drill3d/lesson/DrillLesson';
-import { correctAction, DURATION_MS, exactPercent, requiredPercent, secondsRemaining } from '../../../../src/ui/drill3d/lesson/model';
+import {
+  correctAction,
+  DURATION_MS,
+  exactPercent,
+  requiredPercent,
+  secondsRemaining,
+} from '../../../../src/ui/drill3d/lesson/model';
 
 describe('3D lesson', () => {
-  beforeEach(() => { vi.spyOn(globalThis.performance, 'now').mockReturnValue(0); });
-  afterEach(() => { vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.spyOn(globalThis.performance, 'now').mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   it('compares unrounded one-card hit probability to the correct pot odds', () => {
     const [clear, close] = DEMO_SPOTS;
     expect(exactPercent(clear)).toBeCloseTo(19.565, 2);
@@ -27,9 +37,14 @@ describe('3D lesson', () => {
   });
 
   it('renders accessible controls and states the educational assumptions', () => {
-    const html = renderToStaticMarkup(createElement(DrillLesson, {
-      spot: DEMO_SPOTS[0], onSpotChange: () => {}, onPhaseChange: () => {}, onHighlightChange: () => {},
-    }));
+    const html = renderToStaticMarkup(
+      createElement(DrillLesson, {
+        spot: DEMO_SPOTS[0],
+        onSpotChange: () => {},
+        onPhaseChange: () => {},
+        onHighlightChange: () => {},
+      }),
+    );
     expect(html).toContain('aria-label="Chọn cấp độ"');
     expect(html).toContain('aria-label="Chọn tình huống"');
     expect(html).toContain('aria-pressed="true"');

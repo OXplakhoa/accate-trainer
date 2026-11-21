@@ -11,8 +11,22 @@ export interface DemoSpot {
 }
 
 export const DEMO_SPOTS: readonly [DemoSpot, DemoSpot] = [
-  { id: 'clear', pot: 150, call: 50, outs: 9, heroCards: ['A♥', 'J♥'], board: ['K♥', '8♥', '5♣', '2♠'] },
-  { id: 'close', pot: 160, call: 40, outs: 9, heroCards: ['A♥', 'J♥'], board: ['K♥', '8♥', '5♣', '2♠'] },
+  {
+    id: 'clear',
+    pot: 150,
+    call: 50,
+    outs: 9,
+    heroCards: ['A♥', 'J♥'],
+    board: ['K♥', '8♥', '5♣', '2♠'],
+  },
+  {
+    id: 'close',
+    pot: 160,
+    call: 40,
+    outs: 9,
+    heroCards: ['A♥', 'J♥'],
+    board: ['K♥', '8♥', '5♣', '2♠'],
+  },
 ];
 
 export interface DrillSceneProps {
