@@ -319,3 +319,9 @@
     transform: translateY(1px) scale(0.98);
   }
 }
+
+@media (max-width: 360px) {
+  .dl-header {
+    display: none;
+  }
+}
