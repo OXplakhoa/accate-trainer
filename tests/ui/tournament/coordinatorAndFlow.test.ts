@@ -12,6 +12,7 @@ import {
   enterHandBoundary,
   exchangeInHand,
   getHeroActionValidation,
+  getHeroTurnIdentity,
   HERO_PLAYER_ID,
   performHeroAction,
   performHeroAutoTimeout,
@@ -134,6 +135,7 @@ function createTournamentHarness(options: HarnessOptions) {
   const tickCalls: Array<{ urgent: boolean }> = [];
   const dealEvents: DealAnimationEndInfo[] = [];
 
+  let dealGeneration = 1;
   let dealAnimState: DealAnimState = 'idle';
   const pendingDealRef: { current: PendingDealDescriptor | null } = { current: null };
   const completedDealKeyRef: { current: string | null } = { current: null };
@@ -157,9 +159,11 @@ function createTournamentHarness(options: HarnessOptions) {
 
   const api: SandboxExternalApi = {
     getState: () => session,
-    autoTimeoutHeroAction: () => {
+    getDealGeneration: () => dealGeneration,
+    autoTimeoutHeroAction: (expectedTurnKey?: string) => {
       autoTimeoutCalls += 1;
-      session = performHeroAutoTimeout(session);
+      const targetTurnKey = expectedTurnKey ?? getHeroTurnIdentity(session) ?? undefined;
+      session = performHeroAutoTimeout(session, targetTurnKey);
       assertAllInvariants(session, `after autoTimeout #${autoTimeoutCalls}`);
       syncEffects();
     },
@@ -169,11 +173,16 @@ function createTournamentHarness(options: HarnessOptions) {
     },
   };
 
-  function getDealKey(s: SandboxSessionState): string | null {
+  function getActiveDealKey(s: SandboxSessionState): string | null {
     if (s.phase !== 'in-hand' || s.hand === null) {
       return null;
     }
     return `${s.sessionSeed}:${s.handNumber}:${s.hand.street}:${s.hand.board.length}`;
+  }
+
+  function getDealKey(s: SandboxSessionState): string | null {
+    const activeKey = getActiveDealKey(s);
+    return activeKey !== null ? `${activeKey}:g${dealGeneration}` : null;
   }
 
   let lastEffectDealKey: string | null | undefined = undefined;
@@ -198,6 +207,9 @@ function createTournamentHarness(options: HarnessOptions) {
             handNumber: session.handNumber,
             street: session.hand.street,
             eventCount: session.hand.timeline.length,
+            sessionSeed: session.sessionSeed,
+            dealKey: `${session.sessionSeed}:${session.handNumber}:${session.hand.street}:${session.hand.board.length}`,
+            dealGeneration,
           };
         },
         pendingDealRef,
@@ -221,9 +233,11 @@ function createTournamentHarness(options: HarnessOptions) {
     getAutoTimeoutCalls: () => autoTimeoutCalls,
     getTickCalls: () => tickCalls,
     getDealEvents: () => dealEvents,
+    getDealGeneration: () => dealGeneration,
     updateSession(updater: (prev: SandboxSessionState) => SandboxSessionState, label: string, resetDealCompleted = false) {
       if (resetDealCompleted) {
         completedDealKeyRef.current = null;
+        dealGeneration += 1;
       }
       session = updater(session);
       assertAllInvariants(session, label);
@@ -621,15 +635,17 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
     let revTimeouts = 0;
     driverRev.setController({
       getState: () => currentSession,
-      autoTimeoutHeroAction: () => {
+      autoTimeoutHeroAction: (expectedTurnKey?: string) => {
         revTimeouts += 1;
-        currentSession = performHeroAutoTimeout(currentSession);
+        currentSession = performHeroAutoTimeout(currentSession, expectedTurnKey);
       },
     });
     driverRev.handleDealAnimationEnd({
       handNumber: 1,
       street: 'flop',
       eventCount: currentSession.hand!.timeline.length,
+      sessionSeed: currentSession.sessionSeed,
+      dealKey: `${currentSession.sessionSeed}:1:flop:${currentSession.hand!.board.length}`,
       outcome: 'completed',
     });
     driverRev.handleHeroTurnChange();
@@ -648,13 +664,20 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
     const hReset = createTournamentHarness({ session: s1, clock });
     clock.advance(150);
     hReset.resetSession('p5-reset-2');
-    expect(hReset.getDealEvents().some((e) => e.outcome === 'superseded')).toBe(true);
+    const supersededEv = hReset.getDealEvents().find((e) => e.outcome === 'superseded');
+    expect(supersededEv).toBeDefined();
+    expect(supersededEv?.sessionSeed).toBe('p5-reset-1');
+    expect(supersededEv?.dealKey).toBe('p5-reset-1:1:flop:3');
+    expect(supersededEv?.dealGeneration).toBe(1);
+
     clock.advance(170);
     expect(hReset.driver.getState().status).toBe('waiting-animation');
     hReset.driver.handleDealAnimationEnd({
       handNumber: 1,
       street: 'turn',
       eventCount: 99,
+      sessionSeed: 'p5-reset-2',
+      dealKey: 'p5-reset-2:1:turn:4',
       outcome: 'completed',
     });
     expect(hReset.driver.getState().status).toBe('waiting-animation');
@@ -715,6 +738,8 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
         handNumber: 1,
         street: 'flop',
         eventCount: 3,
+        sessionSeed: 'p5-consec-deals',
+        dealKey: 'p5-consec-deals:1:flop:3',
         outcome: 'completed',
       });
       if (hConsec.getSession().hand!.activePlayerId === HERO_PLAYER_ID) {
@@ -1150,5 +1175,237 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
     const hTest: HandState = hand2.hand!;
     const keyBefore = computeTurnKey(hand2.sessionSeed, hand2.handNumber, hTest);
     expect(keyBefore).toContain(`${hand2.sessionSeed}:${hand2.handNumber}:`);
+  });
+
+  it('O3 regression (Control/Terra repro): sb-1-0 hand 1 flop replaced by sb-a-0 hand 1 flop rejects old completion and unidentified signals; same-seed generation reset rejects gen 1', () => {
+    const clock = createFakeClock();
+    const settings = { playerCount: 4, allowOutOfTurn: false };
+    const previous = createSandboxSession({
+      seed: 'sb-1-0',
+      settings,
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    const current = createSandboxSession({
+      seed: 'sb-a-0',
+      settings,
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+
+    // 1. Direct TournamentClockDriver repro matching deal-reset-repro.cjs
+    let liveSession = previous;
+    const driver = new TournamentClockDriver({ now: clock.now });
+    driver.setController({
+      getState: () => liveSession,
+      autoTimeoutHeroAction: () => {},
+    });
+    const oldCompleted = {
+      handNumber: previous.handNumber,
+      street: previous.hand!.street,
+      eventCount: previous.hand!.timeline.length,
+      outcome: 'completed' as const,
+      sessionSeed: previous.sessionSeed,
+      dealKey: `${previous.sessionSeed}:${previous.handNumber}:${previous.hand!.street}:${previous.hand!.board.length}`,
+    };
+
+    liveSession = current;
+    driver.handleHeroTurnChange();
+    expect(driver.getState().status).toBe('waiting-animation');
+
+    // Old completion from sb-1-0 MUST leave sb-a-0 waiting-animation!
+    driver.handleDealAnimationEnd(oldCompleted);
+    expect(driver.getState().status).toBe('waiting-animation');
+    expect(driver.getState().completedDealKey).toBeNull();
+
+    // Unidentified completion lacking sessionSeed/dealKey MUST also be rejected (no stamping with live session)!
+    driver.handleDealAnimationEnd({
+      handNumber: current.handNumber,
+      street: current.hand!.street,
+      eventCount: current.hand!.timeline.length,
+      outcome: 'completed',
+    });
+    expect(driver.getState().status).toBe('waiting-animation');
+    expect(driver.getState().completedDealKey).toBeNull();
+
+    // Exact new completion for sb-a-0 unlocks clock!
+    driver.handleDealAnimationEnd({
+      handNumber: current.handNumber,
+      street: current.hand!.street,
+      eventCount: current.hand!.timeline.length,
+      sessionSeed: current.sessionSeed,
+      dealKey: `${current.sessionSeed}:${current.handNumber}:${current.hand!.street}:${current.hand!.board.length}`,
+      outcome: 'completed',
+    });
+    expect(driver.getState().status).toBe('running');
+    driver.dispose();
+
+    // 2. Full Sandbox lifecycle / Tournament integration seam with identical handNumber & street + same-seed dealGeneration reset
+    const h = createTournamentHarness({ session: previous, clock });
+    clock.advance(100);
+    // Replace sb-1-0 hand 1 flop with sb-a-0 hand 1 flop mid-animation
+    h.resetSession('sb-a-0', settings);
+    expect(h.driver.getState().status).toBe('waiting-animation');
+
+    const superseded = h.getDealEvents().find((e) => e.outcome === 'superseded');
+    expect(superseded).toEqual({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: previous.hand!.timeline.length,
+      sessionSeed: 'sb-1-0',
+      dealKey: 'sb-1-0:1:flop:3',
+      dealGeneration: 1,
+      outcome: 'superseded',
+    });
+
+    // Inject old sb-1-0 completion -> still waiting-animation
+    h.driver.handleDealAnimationEnd(oldCompleted);
+    expect(h.driver.getState().status).toBe('waiting-animation');
+
+    // Finish sb-a-0 animation at +320ms -> now running with sb-a-0 identity
+    clock.advance(DEAL_MS);
+    expect(h.driver.getState().status).toBe('running');
+    const latestCompleted = h.getDealEvents().filter((e) => e.outcome === 'completed').pop();
+    expect(latestCompleted?.sessionSeed).toBe('sb-a-0');
+    expect(latestCompleted?.dealKey).toBe('sb-a-0:1:flop:3');
+    expect(latestCompleted?.dealGeneration).toBe(2);
+
+    // Same-seed session reset (sb-a-0 gen 2 -> sb-a-0 gen 3): gen 2 completion must NOT unlock gen 3!
+    h.resetSession('sb-a-0', settings);
+    expect(h.getDealGeneration()).toBe(3);
+    expect(h.driver.getState().status).toBe('waiting-animation');
+    h.driver.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: h.getSession().hand!.timeline.length,
+      sessionSeed: 'sb-a-0',
+      dealKey: 'sb-a-0:1:flop:3',
+      dealGeneration: 2,
+      outcome: 'completed',
+    });
+    expect(h.driver.getState().status).toBe('waiting-animation');
+    clock.advance(DEAL_MS);
+    expect(h.driver.getState().status).toBe('running');
+    h.cleanup();
+  });
+
+  it('O3/O5 idempotency regression: repeated completed event while paused preserves remainingMs and tick dedup across Activity hide/reveal', () => {
+    const clock = createFakeClock();
+    const session = createSandboxSession({
+      seed: 'p5-paused-idempotent',
+      settings: {
+        playerCount: 4,
+        allowOutOfTurn: false,
+        tournamentTimerSeconds: 10,
+      },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    const h = createTournamentHarness({ session, clock });
+
+    // Deal completes -> advance 7,500ms -> 2,500ms remaining (remainingSeconds = 3), 3s tick already fired once
+    clock.advance(DEAL_MS);
+    clock.advance(7_500);
+    expect(h.driver.getState().status).toBe('running');
+    expect(h.driver.getState().remainingSeconds).toBe(3);
+    expect(h.getTickCalls()).toEqual([{ urgent: false }]);
+
+    // Activity hides / Tournament becomes inactive -> paused with ~2,500ms remaining
+    h.driver.setMounted(false);
+    h.setActive(false);
+    expect(h.driver.getState().status).toBe('paused');
+    expect(h.driver.getState().remainingMs).toBe(2_500);
+    expect(h.driver.getState().remainingSeconds).toBe(3);
+    expect(h.driver.getState().lastTickedSecond).toBe(3);
+
+    // Repeated completed event while paused MUST NOT rewrite remainingMs back to 10,000ms or clear lastTickedSecond!
+    h.driver.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: h.getSession().hand!.timeline.length,
+      sessionSeed: h.getSession().sessionSeed,
+      dealKey: `${h.getSession().sessionSeed}:1:flop:3`,
+      dealGeneration: h.getDealGeneration(),
+      outcome: 'completed',
+    });
+    expect(h.driver.getState().status).toBe('paused');
+    expect(h.driver.getState().remainingMs).toBe(2_500);
+    expect(h.driver.getState().remainingSeconds).toBe(3);
+    expect(h.driver.getState().lastTickedSecond).toBe(3);
+
+    // Simulate Activity reveal ordering: onHeroTurnChange fires BEFORE setMounted(true)/setActive(true),
+    // and then again AFTER -> remainder and tick dedup remain intact!
+    h.driver.handleHeroTurnChange();
+    expect(h.driver.getState().status).toBe('paused');
+    expect(h.driver.getState().remainingMs).toBe(2_500);
+
+    h.driver.setMounted(true);
+    h.setActive(true);
+    h.driver.handleHeroTurnChange();
+    expect(h.driver.getState().status).toBe('running');
+    expect(h.driver.getState().remainingMs).toBe(2_500);
+    expect(h.driver.getState().remainingSeconds).toBe(3);
+
+    // Advancing 500ms -> 2s tick; 1,000ms -> 1s tick; 1,000ms -> timeout (no duplicate 3s tick!)
+    clock.advance(2_500);
+    expect(h.getAutoTimeoutCalls()).toBe(1);
+    expect(h.getTickCalls()).toEqual([
+      { urgent: false }, // 3s before pause
+      { urgent: false }, // 2s after resume
+      { urgent: true },  // 1s after resume
+    ]);
+    h.cleanup();
+  });
+
+  it('atomic timeout guard: stale auto-timeout updater cannot act on a newer turn or newer hand queued before it executes', () => {
+    // 1. Same hand, Turn 1 -> Hero checks + Bot bets -> Turn 2 on Hero -> Turn 1 timeout updater must no-op!
+    const s0 = createSandboxSession({
+      seed: 'p5-atomic-turn-guard',
+      settings: {
+        playerCount: 4,
+        enabledRivalIds: ['dien', 'da', 'ca'],
+        allowOutOfTurn: false,
+      },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    const turn1Key = getHeroTurnIdentity(s0);
+    expect(turn1Key).not.toBeNull();
+
+    // Simulate newer transitions executing before Turn 1's timeout updater runs:
+    let next = performHeroAction(s0, 'check');
+    let guard = 0;
+    while (
+      next.phase === 'in-hand' &&
+      next.hand?.phase === 'betting' &&
+      next.hand.activePlayerId !== HERO_PLAYER_ID &&
+      guard < 12
+    ) {
+      guard += 1;
+      next = stepOneBotTurn(next);
+    }
+    expect(next.hand?.activePlayerId).toBe(HERO_PLAYER_ID);
+    const turn2Key = getHeroTurnIdentity(next);
+    expect(turn2Key).not.toBeNull();
+    expect(turn2Key).not.toBe(turn1Key);
+
+    // Stage a chip on Turn 2, then execute stale Turn 1 timeout updater
+    const turn2WithChip = stageChip(next, 10);
+    const afterStaleTimeout = performHeroAutoTimeout(turn2WithChip, turn1Key!);
+    expect(afterStaleTimeout).toBe(turn2WithChip);
+    expect(afterStaleTimeout.hand?.activePlayerId).toBe(HERO_PLAYER_ID);
+    expect(chipValue(afterStaleTimeout.stagedChips)).toBe(10);
+    assertAllInvariants(afterStaleTimeout, 'after rejected stale turn1 timeout');
+
+    // 2. Hand 1 Turn 1 -> Hand 1 finishes -> Hand 2 starts (Hero opens) -> Turn 1 timeout updater must no-op!
+    let handDone = performHeroAction(s0, 'fold');
+    while (handDone.phase === 'in-hand' && handDone.hand?.phase === 'betting') {
+      handDone = stepOneBotTurn(handDone);
+    }
+    const hand2 = startNextHand(handDone, { openerId: HERO_PLAYER_ID });
+    expect(hand2.handNumber).toBe(2);
+    expect(hand2.hand?.activePlayerId).toBe(HERO_PLAYER_ID);
+
+    const afterStaleHand1Timeout = performHeroAutoTimeout(hand2, turn1Key!);
+    expect(afterStaleHand1Timeout).toBe(hand2);
+    expect(afterStaleHand1Timeout.handNumber).toBe(2);
+    expect(afterStaleHand1Timeout.hand?.activePlayerId).toBe(HERO_PLAYER_ID);
+    assertAllInvariants(afterStaleHand1Timeout, 'after rejected stale hand1 timeout on hand2');
   });
 });

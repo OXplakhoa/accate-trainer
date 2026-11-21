@@ -84,6 +84,9 @@ export function syncDealAnimationLifecycle({
           handNumber: info.handNumber,
           street: info.street,
           eventCount: info.eventCount,
+          ...(info.sessionSeed !== undefined ? { sessionSeed: info.sessionSeed } : {}),
+          ...(info.dealKey !== undefined ? { dealKey: info.dealKey } : {}),
+          ...(info.dealGeneration !== undefined ? { dealGeneration: info.dealGeneration } : {}),
         },
       };
     }

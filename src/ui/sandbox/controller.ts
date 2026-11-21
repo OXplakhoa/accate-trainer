@@ -873,16 +873,53 @@ export function performHeroOutOfTurn(
 }
 
 /**
- * Tournament timeout helper (AC O1, O2):
- * Returns staged chips to stack, checks if legal, otherwise folds.
+ * Computes a stable identity for Hero's current decision turn, excluding `chip-exchange`
+ * timeline events so mid-turn chip exchanges stay on the same turn identity while any
+ * action, street transition, new hand, or session reset produces a distinct identity.
  */
-export function performHeroAutoTimeout(session: SandboxSessionState): SandboxSessionState {
+export function getHeroTurnIdentity(session: SandboxSessionState): string | null {
   if (
     session.phase !== 'in-hand' ||
     session.hand === null ||
     session.hand.phase !== 'betting' ||
     session.hand.activePlayerId !== HERO_PLAYER_ID
   ) {
+    return null;
+  }
+  let nonExchangeCount = 0;
+  for (const ev of session.hand.timeline) {
+    if (
+      ev.type === 'cards-dealt' ||
+      ev.type === 'street-dealt' ||
+      ev.type === 'player-action'
+    ) {
+      nonExchangeCount++;
+    }
+  }
+  return `${session.sessionSeed}:${session.handNumber}:${session.hand.street}:${nonExchangeCount}`;
+}
+
+/**
+ * Tournament timeout helper (AC O1, O2):
+ * Returns staged chips to stack, checks if legal, otherwise folds.
+ * When `expectedTurnKey` is provided, atomically guards against acting on a different
+ * turn if a newer controller transition was queued before this updater executed.
+ */
+export function performHeroAutoTimeout(
+  session: SandboxSessionState,
+  expectedTurnKey?: string,
+): SandboxSessionState {
+  if (
+    session.phase !== 'in-hand' ||
+    session.hand === null ||
+    session.hand.phase !== 'betting' ||
+    session.hand.activePlayerId !== HERO_PLAYER_ID ||
+    session.pendingHeroLeave
+  ) {
+    return session;
+  }
+
+  if (expectedTurnKey !== undefined && getHeroTurnIdentity(session) !== expectedTurnKey) {
     return session;
   }
 

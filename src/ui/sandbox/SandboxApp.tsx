@@ -31,6 +31,7 @@ import {
   exchangeInHand,
   getAvailableHeroStackAfterStaged,
   getHeroActionValidation,
+  getHeroTurnIdentity,
   getPersistedSettingsForSession,
   getSeatRivalMetadata,
   inviteRivalAtBoundary,
@@ -139,10 +140,12 @@ export function SandboxApp({
   const effectiveReducedMotion = session.appliedSettings.reducedMotion || systemReducedMotion;
   const lang = session.appliedSettings.terminology;
 
-  const dealKey =
+  const dealGenerationRef = useRef(1);
+  const activeDealKey =
     session.phase === 'in-hand' && session.hand !== null
       ? `${session.sessionSeed}:${session.handNumber}:${session.hand.street}:${session.hand.board.length}`
       : null;
+  const dealKey = activeDealKey !== null ? `${activeDealKey}:g${dealGenerationRef.current}` : null;
 
   const [dealAnimState, setDealAnimState] = useState<DealAnimState>(() => {
     if (dealKey === null) {
@@ -224,10 +227,19 @@ export function SandboxApp({
       return;
     }
     onControllerReady({
-      autoTimeoutHeroAction: () => {
-        setSession((prev) => performHeroAutoTimeout(prev));
+      autoTimeoutHeroAction: (expectedTurnKey?: string) => {
+        const capturedTurnKey =
+          expectedTurnKey ?? getHeroTurnIdentity(sessionRef.current) ?? undefined;
+        const capturedGeneration = dealGenerationRef.current;
+        setSession((prev) => {
+          if (dealGenerationRef.current !== capturedGeneration) {
+            return prev;
+          }
+          return performHeroAutoTimeout(prev, capturedTurnKey);
+        });
       },
       getState: () => sessionRef.current,
+      getDealGeneration: () => dealGenerationRef.current,
       playTimerTick: (urgent?: boolean) => {
         audioRef.current?.playTimerTick(urgent);
       },
@@ -250,6 +262,9 @@ export function SandboxApp({
           handNumber: currentSession.handNumber,
           street: currentHand.street,
           eventCount: currentHand.timeline.length,
+          sessionSeed: currentSession.sessionSeed,
+          dealKey: `${currentSession.sessionSeed}:${currentSession.handNumber}:${currentHand.street}:${currentHand.board.length}`,
+          dealGeneration: dealGenerationRef.current,
         };
       },
       pendingDealRef,
@@ -267,7 +282,7 @@ export function SandboxApp({
     activeHand.activePlayerId === HERO_PLAYER_ID;
   const heroTurnKey =
     activeHand !== null
-      ? `${session.handNumber}:${activeHand.phase}:${activeHand.activePlayerId}:${activeHand.timeline.length}`
+      ? `${session.sessionSeed}:${session.handNumber}:${activeHand.phase}:${activeHand.activePlayerId}:${activeHand.timeline.length}:${dealGenerationRef.current}`
       : 'between';
 
   useEffect(() => {
@@ -465,6 +480,7 @@ export function SandboxApp({
       if (applyMode === 'new-session') {
         audioRef.current?.clearPlayedHistory();
         completedDealKeyRef.current = null;
+        dealGenerationRef.current += 1;
       }
       saveSandboxSettings(sanitized, storage);
       processedTurnKeyRef.current = null;

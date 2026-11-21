@@ -44,6 +44,7 @@ export {
   generateUiSeed,
   getAvailableHeroStackAfterStaged,
   getHeroActionValidation,
+  getHeroTurnIdentity,
   getPersistedSettingsForSession,
   getSeatRivalMetadata,
   inviteRivalAtBoundary,

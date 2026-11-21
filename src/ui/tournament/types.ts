@@ -14,6 +14,7 @@ export interface TournamentTurnDescriptor {
   readonly sessionSeed: string;
   readonly handNumber: number;
   readonly street: Street;
+  readonly dealGeneration?: number;
   readonly durationSeconds: TournamentTimerSeconds;
   readonly hadCancelledDeclaration: boolean;
 }
@@ -22,6 +23,7 @@ export interface TournamentClockState {
   readonly status: TournamentTimerStatus;
   readonly activeTurn: TournamentTurnDescriptor | null;
   readonly completedDealKey: string | null;
+  readonly completedDealGeneration: number | null;
   readonly deadlineMs: number | null;
   readonly remainingMs: number;
   readonly remainingSeconds: number;

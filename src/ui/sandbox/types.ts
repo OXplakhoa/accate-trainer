@@ -172,6 +172,9 @@ export interface DealAnimationEndInfo {
   readonly handNumber: number;
   readonly street: Street;
   readonly eventCount: number;
+  readonly sessionSeed?: string;
+  readonly dealKey?: string;
+  readonly dealGeneration?: number;
   readonly outcome: DealAnimationEndOutcome;
 }
 
@@ -183,8 +186,9 @@ export interface HeroTurnChangeInfo {
 }
 
 export interface SandboxExternalApi {
-  readonly autoTimeoutHeroAction: () => void;
+  readonly autoTimeoutHeroAction: (expectedTurnKey?: string) => void;
   readonly getState: () => SandboxSessionState;
+  readonly getDealGeneration?: () => number;
   readonly playTimerTick?: (urgent?: boolean) => void;
 }
 

@@ -66,6 +66,7 @@ export interface DrillAppProps {
   readonly defaultConcept?: DrillConceptId;
   readonly defaultClockSeconds?: 10 | 15 | 20 | 25;
   readonly onBackToSandbox?: () => void;
+  readonly backToTableLabel?: string;
 }
 
 const STEP_LABELS_VI: Readonly<Record<Level1StepId, string>> = Object.freeze({
@@ -785,7 +786,7 @@ export function DrillApp(props: DrillAppProps) {
                 className="drill-btn"
                 onClick={props.onBackToSandbox}
               >
-                ← Quay lại Bàn Sandbox
+                {props.backToTableLabel ?? '← Quay lại Bàn Sandbox'}
               </button>
             ) : null}
           </nav>

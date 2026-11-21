@@ -1,7 +1,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { App } from '../../../src/ui/App';
+import { DrillApp } from '../../../src/ui/drill';
 import {
   createSandboxSession,
   getHeroActionValidation,
@@ -18,16 +19,17 @@ import {
 } from '../../../src/ui/tournament';
 
 describe('P5 Tournament — UI Rendering, Accessibility, O6 Suppression & App Navigation', () => {
-  beforeEach(() => {
+  beforeAll(() => {
     vi.spyOn(globalThis.performance, 'now').mockReturnValue(0);
   });
 
-  afterEach(() => {
+  afterAll(() => {
     vi.restoreAllMocks();
   });
 
-  it('App keeps Drill open by default and exposes Tournament in top navigation', () => {
+  it('App keeps Drill open by default and exposes Tournament in top navigation', async () => {
     const html = renderToStaticMarkup(createElement(App));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(html).toContain('aria-label="Chế độ chơi"');
     expect(html).toContain('Luyện tập');
@@ -282,5 +284,32 @@ describe('P5 Tournament — UI Rendering, Accessibility, O6 Suppression & App Na
     expect(settingsHtml).toContain('20s');
     expect(settingsHtml).toContain('25s');
     expect(settingsHtml).not.toContain('Gợi ý dừng ở spot quan trọng');
+  });
+
+  it('DrillApp shows "← Quay lại Tournament" when opened from Tournament while preserving "← Quay lại Bàn Sandbox" for Sandbox', () => {
+    const s = createSandboxSession({
+      seed: 'p5-drill-back-label',
+      settings: { playerCount: 4, allowOutOfTurn: false },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+
+    const sandboxReturnHtml = renderToStaticMarkup(
+      createElement(DrillApp, {
+        initialSpot: { hand: s.hand!, heroId: HERO_PLAYER_ID },
+        onBackToSandbox: () => undefined,
+      }),
+    );
+    expect(sandboxReturnHtml).toContain('← Quay lại Bàn Sandbox');
+    expect(sandboxReturnHtml).not.toContain('← Quay lại Tournament');
+
+    const tournamentReturnHtml = renderToStaticMarkup(
+      createElement(DrillApp, {
+        initialSpot: { hand: s.hand!, heroId: HERO_PLAYER_ID },
+        onBackToSandbox: () => undefined,
+        backToTableLabel: '← Quay lại Tournament',
+      }),
+    );
+    expect(tournamentReturnHtml).toContain('← Quay lại Tournament');
+    expect(tournamentReturnHtml).not.toContain('← Quay lại Bàn Sandbox');
   });
 });

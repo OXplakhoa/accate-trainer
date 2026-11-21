@@ -45,6 +45,9 @@ export function App() {
         ? openTournament
         : openSandbox;
 
+  const backToTableLabel =
+    practiceSpot?.source === 'tournament' ? '← Quay lại Tournament' : undefined;
+
   return (
     <>
       <nav className="accate-mode-nav" aria-label="Chế độ chơi">
@@ -61,7 +64,11 @@ export function App() {
 
       <Suspense fallback={<p className="accate-app-status" role="status">Đang mở chế độ chơi…</p>}>
         <Activity mode={mode === 'drill' ? 'visible' : 'hidden'}>
-          <DrillApp initialSpot={practiceSpot} onBackToSandbox={backToTable} />
+          <DrillApp
+            initialSpot={practiceSpot}
+            onBackToSandbox={backToTable}
+            backToTableLabel={backToTableLabel}
+          />
         </Activity>
         {openedSandbox && (
           <Activity mode={mode === 'sandbox' ? 'visible' : 'hidden'}>

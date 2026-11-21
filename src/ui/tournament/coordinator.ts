@@ -13,8 +13,13 @@ import {
 } from '../sandbox';
 import type { TournamentClockState, TournamentTurnDescriptor } from './types';
 
-export function computeDealKey(sessionSeed: string, handNumber: number, street: Street): string {
-  return `${sessionSeed}:${handNumber}:${street}`;
+export function computeDealKey(
+  sessionSeed: string,
+  handNumber: number,
+  street: Street,
+  boardLength: number,
+): string {
+  return `${sessionSeed}:${handNumber}:${street}:${boardLength}`;
 }
 
 /**
@@ -76,6 +81,7 @@ export function createInitialTournamentClockState(
     status: 'idle',
     activeTurn: null,
     completedDealKey: null,
+    completedDealGeneration: null,
     deadlineMs: null,
     remainingMs: configuredDurationSeconds * 1000,
     remainingSeconds: configuredDurationSeconds,
@@ -123,6 +129,7 @@ export function reconcileSessionSnapshot(
   session: SandboxSessionState | null,
   active: boolean,
   nowMs: number,
+  liveDealGeneration?: number,
 ): TournamentClockState {
   const configuredDurationSeconds =
     session?.appliedSettings.tournamentTimerSeconds ?? state.configuredDurationSeconds;
@@ -135,13 +142,28 @@ export function reconcileSessionSnapshot(
     session.phase === 'in-hand' &&
     session.hand !== null &&
     session.hand.phase === 'betting'
-      ? computeDealKey(session.sessionSeed, session.handNumber, session.hand.street)
+      ? computeDealKey(
+          session.sessionSeed,
+          session.handNumber,
+          session.hand.street,
+          session.hand.board.length,
+        )
       : null;
 
+  const generationMatchesCompleted =
+    liveDealGeneration === undefined ||
+    state.completedDealGeneration === null ||
+    state.completedDealGeneration === liveDealGeneration;
+
   const validCompletedDealKey =
-    currentBettingDealKey !== null && state.completedDealKey === currentBettingDealKey
+    currentBettingDealKey !== null &&
+    state.completedDealKey === currentBettingDealKey &&
+    generationMatchesCompleted
       ? state.completedDealKey
       : null;
+
+  const validCompletedDealGeneration =
+    validCompletedDealKey !== null ? state.completedDealGeneration : null;
 
   if (!isFreeHeroDecisionTurn(session) || session === null || session.hand === null) {
     return {
@@ -149,6 +171,7 @@ export function reconcileSessionSnapshot(
       status: 'idle',
       activeTurn: null,
       completedDealKey: validCompletedDealKey,
+      completedDealGeneration: validCompletedDealGeneration,
       deadlineMs: null,
       remainingMs: configuredDurationSeconds * 1000,
       remainingSeconds: configuredDurationSeconds,
@@ -161,17 +184,30 @@ export function reconcileSessionSnapshot(
   }
 
   const hand = session.hand;
-  const nextDealKey = computeDealKey(session.sessionSeed, session.handNumber, hand.street);
+  const nextDealKey = computeDealKey(
+    session.sessionSeed,
+    session.handNumber,
+    hand.street,
+    hand.board.length,
+  );
   const nextTurnKey = computeTurnKey(session.sessionSeed, session.handNumber, hand);
   const isDealCompleted = validCompletedDealKey === nextDealKey;
   const hadCancelledDeclaration = hand.awaitingDecision?.hadCancelledDeclaration ?? false;
 
-  if (state.activeTurn !== null && state.activeTurn.turnKey === nextTurnKey) {
+  const isSameTurn =
+    state.activeTurn !== null &&
+    state.activeTurn.turnKey === nextTurnKey &&
+    (liveDealGeneration === undefined ||
+      state.activeTurn.dealGeneration === undefined ||
+      state.activeTurn.dealGeneration === liveDealGeneration);
+
+  if (isSameTurn && state.activeTurn !== null) {
     if (state.timedOutTurnKey === nextTurnKey) {
       return {
         ...state,
         status: 'timed-out',
         completedDealKey: validCompletedDealKey,
+        completedDealGeneration: validCompletedDealGeneration,
         deadlineMs: null,
         remainingMs: 0,
         remainingSeconds: 0,
@@ -188,6 +224,7 @@ export function reconcileSessionSnapshot(
         return {
           ...paused,
           completedDealKey: validCompletedDealKey,
+          completedDealGeneration: validCompletedDealGeneration,
           configuredDurationSeconds,
           pendingTimerSeconds,
           hasBindingOutOfTurn,
@@ -198,6 +235,7 @@ export function reconcileSessionSnapshot(
         ...state,
         status: isDealCompleted ? 'paused' : 'waiting-animation',
         completedDealKey: validCompletedDealKey,
+        completedDealGeneration: validCompletedDealGeneration,
         deadlineMs: null,
         configuredDurationSeconds,
         pendingTimerSeconds,
@@ -212,6 +250,7 @@ export function reconcileSessionSnapshot(
         ...state,
         status: 'running',
         completedDealKey: validCompletedDealKey,
+        completedDealGeneration: validCompletedDealGeneration,
         deadlineMs: nowMs + remainingMs,
         remainingMs,
         remainingSeconds: Math.ceil(remainingMs / 1000),
@@ -228,6 +267,7 @@ export function reconcileSessionSnapshot(
         ...state,
         status: 'running',
         completedDealKey: validCompletedDealKey,
+        completedDealGeneration: validCompletedDealGeneration,
         deadlineMs: nowMs + totalMs,
         remainingMs: totalMs,
         remainingSeconds: state.activeTurn.durationSeconds,
@@ -242,6 +282,7 @@ export function reconcileSessionSnapshot(
     return {
       ...state,
       completedDealKey: validCompletedDealKey,
+      completedDealGeneration: validCompletedDealGeneration,
       configuredDurationSeconds,
       pendingTimerSeconds,
       hasBindingOutOfTurn,
@@ -257,6 +298,7 @@ export function reconcileSessionSnapshot(
     sessionSeed: session.sessionSeed,
     handNumber: session.handNumber,
     street: hand.street,
+    ...(liveDealGeneration !== undefined ? { dealGeneration: liveDealGeneration } : {}),
     durationSeconds: configuredDurationSeconds,
     hadCancelledDeclaration,
   };
@@ -267,6 +309,7 @@ export function reconcileSessionSnapshot(
       status: isDealCompleted ? 'paused' : 'waiting-animation',
       activeTurn: nextTurn,
       completedDealKey: validCompletedDealKey,
+      completedDealGeneration: validCompletedDealGeneration,
       deadlineMs: null,
       remainingMs: totalMs,
       remainingSeconds: configuredDurationSeconds,
@@ -284,6 +327,7 @@ export function reconcileSessionSnapshot(
       status: 'running',
       activeTurn: nextTurn,
       completedDealKey: validCompletedDealKey,
+      completedDealGeneration: validCompletedDealGeneration,
       deadlineMs: nowMs + totalMs,
       remainingMs: totalMs,
       remainingSeconds: configuredDurationSeconds,
@@ -300,6 +344,7 @@ export function reconcileSessionSnapshot(
     status: 'waiting-animation',
     activeTurn: nextTurn,
     completedDealKey: validCompletedDealKey,
+    completedDealGeneration: validCompletedDealGeneration,
     deadlineMs: null,
     remainingMs: totalMs,
     remainingSeconds: configuredDurationSeconds,
@@ -311,71 +356,100 @@ export function reconcileSessionSnapshot(
   };
 }
 
+function matchesSupersededInfo(
+  dealKey: string,
+  dealGeneration: number | undefined | null,
+  info: DealAnimationEndInfo,
+): boolean {
+  if (info.dealKey === undefined || info.sessionSeed === undefined) {
+    return false;
+  }
+  if (dealKey !== info.dealKey) {
+    return false;
+  }
+  if (
+    info.dealGeneration !== undefined &&
+    dealGeneration !== undefined &&
+    dealGeneration !== null &&
+    info.dealGeneration !== dealGeneration
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function applyDealAnimationEnd(
   state: TournamentClockState,
   info: DealAnimationEndInfo,
   session: SandboxSessionState | null,
   active: boolean,
   nowMs: number,
+  liveDealGeneration?: number,
 ): TournamentClockState {
   if (info.outcome === 'superseded') {
-    const dealSuffix = `:${info.handNumber}:${info.street}`;
-    const clearedCompleted =
-      state.completedDealKey !== null && state.completedDealKey.endsWith(dealSuffix)
-        ? null
-        : state.completedDealKey;
-
-    const currentMatchesActiveTurn =
-      state.activeTurn !== null &&
-      session !== null &&
-      session.phase === 'in-hand' &&
-      session.hand !== null &&
-      session.hand.phase === 'betting' &&
-      state.activeTurn.sessionSeed === session.sessionSeed &&
-      state.activeTurn.handNumber === session.handNumber &&
-      state.activeTurn.street === session.hand.street;
+    const clearCompleted =
+      state.completedDealKey !== null &&
+      matchesSupersededInfo(state.completedDealKey, state.completedDealGeneration, info);
+    const nextCompletedKey = clearCompleted ? null : state.completedDealKey;
+    const nextCompletedGen = clearCompleted ? null : state.completedDealGeneration;
 
     if (
       state.activeTurn !== null &&
-      state.activeTurn.handNumber === info.handNumber &&
-      state.activeTurn.street === info.street &&
-      !currentMatchesActiveTurn
+      matchesSupersededInfo(state.activeTurn.dealKey, state.activeTurn.dealGeneration, info)
     ) {
-      return {
-        ...state,
-        status: 'idle',
-        activeTurn: null,
-        completedDealKey: clearedCompleted,
-        deadlineMs: null,
-        remainingMs: state.configuredDurationSeconds * 1000,
-        remainingSeconds: state.configuredDurationSeconds,
-        lastTickedSecond: null,
-      };
+      const liveDealKey =
+        session !== null &&
+        session.phase === 'in-hand' &&
+        session.hand !== null &&
+        session.hand.phase === 'betting'
+          ? computeDealKey(
+              session.sessionSeed,
+              session.handNumber,
+              session.hand.street,
+              session.hand.board.length,
+            )
+          : null;
+      const liveMatchesTurn =
+        liveDealKey === state.activeTurn.dealKey &&
+        (liveDealGeneration === undefined ||
+          state.activeTurn.dealGeneration === undefined ||
+          state.activeTurn.dealGeneration === liveDealGeneration);
+
+      if (!liveMatchesTurn) {
+        return {
+          ...state,
+          status: 'idle',
+          activeTurn: null,
+          completedDealKey: nextCompletedKey,
+          completedDealGeneration: nextCompletedGen,
+          deadlineMs: null,
+          remainingMs: state.configuredDurationSeconds * 1000,
+          remainingSeconds: state.configuredDurationSeconds,
+          lastTickedSecond: null,
+        };
+      }
+
+      if (state.status === 'running') {
+        return {
+          ...state,
+          status: 'waiting-animation',
+          completedDealKey: nextCompletedKey,
+          completedDealGeneration: nextCompletedGen,
+          deadlineMs: null,
+          remainingMs: state.activeTurn.durationSeconds * 1000,
+          remainingSeconds: state.activeTurn.durationSeconds,
+          lastTickedSecond: null,
+        };
+      }
     }
 
-    if (
-      state.activeTurn !== null &&
-      state.activeTurn.handNumber === info.handNumber &&
-      state.activeTurn.street === info.street &&
-      state.status === 'running'
-    ) {
-      return {
-        ...state,
-        status: 'waiting-animation',
-        completedDealKey: clearedCompleted,
-        deadlineMs: null,
-        remainingMs: state.activeTurn.durationSeconds * 1000,
-        remainingSeconds: state.activeTurn.durationSeconds,
-        lastTickedSecond: null,
-      };
-    }
-
-    return clearedCompleted !== state.completedDealKey
-      ? { ...state, completedDealKey: clearedCompleted }
+    return clearCompleted
+      ? { ...state, completedDealKey: null, completedDealGeneration: null }
       : state;
   }
 
   // outcome === 'completed'
+  // Strict provenance + live-state guard: never stamp an older or unidentified completion onto live state.
   if (
     session === null ||
     session.phase !== 'in-hand' ||
@@ -384,22 +458,60 @@ export function applyDealAnimationEnd(
     session.handNumber !== info.handNumber ||
     session.hand.street !== info.street
   ) {
-    // Reject stale completion callback after hand/street/session moved on.
     return state;
   }
 
-  const completedKey = computeDealKey(session.sessionSeed, info.handNumber, info.street);
+  if (info.sessionSeed === undefined || info.dealKey === undefined) {
+    return state;
+  }
+
+  const expectedDealKey = computeDealKey(
+    session.sessionSeed,
+    session.handNumber,
+    session.hand.street,
+    session.hand.board.length,
+  );
+  if (info.sessionSeed !== session.sessionSeed || info.dealKey !== expectedDealKey) {
+    return state;
+  }
+
+  if (
+    info.dealGeneration !== undefined &&
+    liveDealGeneration !== undefined &&
+    info.dealGeneration !== liveDealGeneration
+  ) {
+    return state;
+  }
+
+  const nextCompletedGen = info.dealGeneration ?? liveDealGeneration ?? null;
+
+  // Idempotent guard: repeated completion for an already-completed deal must not rewrite state
+  // (preserving paused remainingMs, running deadlineMs, and lastTickedSecond).
+  if (
+    state.completedDealKey === expectedDealKey &&
+    state.completedDealGeneration === nextCompletedGen
+  ) {
+    return state;
+  }
+
   const nextState: TournamentClockState = {
     ...state,
-    completedDealKey: completedKey,
+    completedDealKey: expectedDealKey,
+    completedDealGeneration: nextCompletedGen,
   };
 
   if (
     nextState.activeTurn !== null &&
-    nextState.activeTurn.dealKey === completedKey &&
+    nextState.activeTurn.dealKey === expectedDealKey &&
+    (nextCompletedGen === null ||
+      nextState.activeTurn.dealGeneration === undefined ||
+      nextState.activeTurn.dealGeneration === nextCompletedGen) &&
     nextState.timedOutTurnKey !== nextState.activeTurn.turnKey
   ) {
     if (!active) {
+      if (nextState.status === 'paused') {
+        return nextState;
+      }
       const totalMs = nextState.activeTurn.durationSeconds * 1000;
       return {
         ...nextState,
@@ -554,6 +666,10 @@ export class TournamentClockDriver {
     return this.active && this.mounted;
   }
 
+  private getLiveDealGeneration(): number | undefined {
+    return this.controller?.getDealGeneration?.();
+  }
+
   private clearScheduledTimer(): void {
     if (this.timerId !== null) {
       this.clearTimeoutFn(this.timerId);
@@ -606,7 +722,7 @@ export class TournamentClockDriver {
         computeTurnKey(session.sessionSeed, session.handNumber, session.hand) ===
           result.timeoutTurnKey
       ) {
-        this.controller?.autoTimeoutHeroAction();
+        this.controller?.autoTimeoutHeroAction(result.timeoutTurnKey);
       }
     }
   }
@@ -619,6 +735,7 @@ export class TournamentClockDriver {
       session,
       this.getEffectiveActive(),
       this.now(),
+      this.getLiveDealGeneration(),
     );
     this.commitState(next);
   }
@@ -630,6 +747,7 @@ export class TournamentClockDriver {
       session,
       this.getEffectiveActive(),
       this.now(),
+      this.getLiveDealGeneration(),
     );
     this.commitState(next);
   }
@@ -642,6 +760,7 @@ export class TournamentClockDriver {
       session,
       this.getEffectiveActive(),
       this.now(),
+      this.getLiveDealGeneration(),
     );
     this.commitState(next);
   }
@@ -670,7 +789,13 @@ export class TournamentClockDriver {
       return;
     }
     const session = this.controller?.getState() ?? null;
-    const resumed = reconcileSessionSnapshot(this.state, session, true, this.now());
+    const resumed = reconcileSessionSnapshot(
+      this.state,
+      session,
+      true,
+      this.now(),
+      this.getLiveDealGeneration(),
+    );
     this.commitState(resumed);
   }
 
