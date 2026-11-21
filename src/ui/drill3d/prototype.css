@@ -65,3 +65,29 @@ body { margin: 0; }
   .ad3-workspace { grid-template-columns: minmax(0, 1fr); }
   .ad3-masthead { padding-block: 14px 12px; }
 }
+
+.ad3-welcome {
+  border-block-start: 3px solid var(--drill-accent);
+  padding: clamp(14px, 3vw, 26px);
+  background: var(--drill-paper);
+}
+
+.ad3-welcome h2 {
+  margin: 0;
+  font-size: clamp(1.3rem, 2.5vw, 1.8rem);
+  line-height: 1.12;
+  letter-spacing: -.03em;
+}
+
+.ad3-welcome p { line-height: 1.5; }
+
+.ad3-welcome button {
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 700;
+  background: var(--drill-accent);
+  color: #fff8e9;
+  cursor: pointer;
+}
