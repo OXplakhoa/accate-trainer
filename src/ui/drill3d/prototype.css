@@ -1,0 +1,67 @@
+:root {
+  font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  color: #382b24;
+  background: #f3e8d4;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body { margin: 0; }
+
+.accate-drill-3d {
+  --drill-ink: #382b24;
+  --drill-canvas: #f3e8d4;
+  --drill-paper: #fff8e9;
+  --drill-accent: #265f56;
+  --drill-line: #d5c0a5;
+  min-block-size: 100vh;
+  font-variant-numeric: tabular-nums;
+}
+
+.ad3-masthead {
+  box-sizing: border-box;
+  max-inline-size: 1580px;
+  margin-inline: auto;
+  padding: 22px clamp(12px, 3vw, 36px) 16px;
+}
+
+.ad3-masthead h1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  margin: 0;
+  font-size: clamp(1.2rem, 2.4vw, 1.75rem);
+  line-height: 1.05;
+  letter-spacing: -.035em;
+}
+
+.ad3-masthead h1 span {
+  color: var(--drill-accent);
+  font-size: 1.15em;
+  font-weight: 800;
+}
+
+.ad3-workspace {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  align-items: start;
+  gap: clamp(12px, 2vw, 26px);
+  max-inline-size: 1580px;
+  margin-inline: auto;
+  padding: 0 clamp(12px, 3vw, 36px) 30px;
+}
+
+.ad3-table,
+.ad3-lesson { min-inline-size: 0; }
+
+.accate-drill-3d :focus-visible {
+  outline: 3px solid #235b96;
+  outline-offset: 3px;
+}
+
+@media (max-width: 920px) {
+  .ad3-workspace { grid-template-columns: minmax(0, 1fr); }
+  .ad3-masthead { padding-block: 14px 12px; }
+}
