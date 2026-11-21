@@ -261,3 +261,61 @@
     background: #1c5548;
   }
 }
+
+@media (max-width: 540px) {
+  .drill-lesson {
+    padding: 12px;
+  }
+
+  .dl-header h2 {
+    margin: 2px 0 0;
+    font-size: 1.18rem;
+  }
+
+  .dl-selectors {
+    gap: 7px;
+    margin: 10px 0 8px;
+  }
+
+  .dl-label {
+    margin-bottom: 3px;
+  }
+
+  .dl-assumption {
+    line-height: 1.35;
+  }
+
+  .dl-card {
+    margin-top: 9px;
+    padding: 10px;
+  }
+
+  .dl-card h3 {
+    margin-top: 9px;
+  }
+
+  .dl-options,
+  .dl-actions {
+    margin-top: 9px;
+  }
+
+  .dl-options button {
+    flex-basis: 0;
+    min-width: 0;
+    padding-inline: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dl-options button,
+  .dl-actions button,
+  .drill-lesson .dl-primary {
+    transition: transform 120ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .dl-options button:active,
+  .dl-actions button:active,
+  .drill-lesson .dl-primary:active {
+    transform: translateY(1px) scale(0.98);
+  }
+}

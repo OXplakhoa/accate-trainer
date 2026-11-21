@@ -133,3 +133,7 @@ body {
     transform: scale(0.96);
   }
 }
+
+.accate-drill-3d .ad3-lesson:focus-visible {
+  outline: none;
+}
