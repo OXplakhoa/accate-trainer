@@ -101,3 +101,35 @@ body {
   color: #fff8e9;
   cursor: pointer;
 }
+
+.ad3-masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.ad3-sound {
+  flex-shrink: 0;
+  border: 1px solid var(--drill-line);
+  border-radius: 999px;
+  background: var(--drill-paper);
+  padding: 8px 12px;
+  color: var(--drill-ink);
+  font: inherit;
+  font-size: 0.83rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ad3-welcome button,
+  .ad3-sound {
+    transition: transform 140ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .ad3-welcome button:active,
+  .ad3-sound:active {
+    transform: scale(0.96);
+  }
+}
