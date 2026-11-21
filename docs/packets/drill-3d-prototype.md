@@ -21,3 +21,9 @@
 `src/ui/drill3d/contract.ts` thuộc Control. Scene lane export `DrillScene` từ `scene/DrillScene.tsx`. Lesson lane export `DrillLesson` từ `lesson/DrillLesson.tsx`. Tên props trong contract, shell hiển thị hai thành phần và quản lý state. Cấp 1 và 3 hiển thị từ cùng Lesson lane. Cả hai đi theo tiếng Việt và giữ thuật ngữ poker quen thuộc.
 
 Scene owner Gemini 4 Neon High. Lesson owner GPT 6.1 Terra High. Mỗi lane dùng worktree riêng; Control tích hợp trên nhánh prototype. Hai model khác nhau review độc lập SHA tích hợp, ưu tiên Hydrogen High và Argon High. Preview là cổng duyệt trực quan.
+
+## Motion và Sound FX
+
+- Nhịp vào bàn và xem phản ứng có chuyển động ngắn, camera chuyển dứt khoát vào vị trí nhẩm. Chỉ dùng motion ở lúc đổi cảnh, tương tác với bàn và chỉ số đang giải thích. Ưu tiên transform/opacity và kết thúc render khi cảnh đứng yên. Chế độ giảm chuyển động hiển thị kết quả tại chỗ.
+- Sound FX riêng cho bài vào bàn, chip Call, Fold, trả lời đúng/sai và ba giây cuối. Âm ngắn, khác nhau rõ, cân gain để không chói, sắp lớp hợp lý. Cấp 3 chỉ phát âm thao tác trước khi chốt action hoặc hết thời gian. Phản hồi đúng/sai chỉ theo chính sách từng cấp. Không phát âm khi tab ẩn. Nút tắt âm dừng ngay lớp âm hiện tại.
+- Chỉ mở Web Audio từ thao tác người dùng. Hỗ trợ không có Web Audio, đóng và giải phóng khi unmount. Review lại liên kết timeout với âm thanh và các lần reset tình huống.

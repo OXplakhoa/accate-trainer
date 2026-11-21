@@ -36,9 +36,12 @@ export interface DrillSceneProps {
   readonly reducedMotion: boolean;
 }
 
+export type DrillCue = 'deal' | 'chip' | 'fold' | 'correct' | 'incorrect' | 'tick' | 'expired';
+
 export interface DrillLessonProps {
   readonly spot: DemoSpot;
   readonly onSpotChange: (spot: DemoSpot) => void;
   readonly onPhaseChange: (phase: ScenePhase) => void;
   readonly onHighlightChange: (highlight: LessonHighlight) => void;
+  readonly onCue?: (cue: DrillCue) => void;
 }
