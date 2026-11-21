@@ -329,7 +329,7 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
   };
 
   const updateSpot = (spot: DemoSpot) => {
-    const key = `${spot.id}:${spot.pot}:${spot.call}:${spot.heroCards.join(',')}:${spot.board.join(',')}`;
+    const key = `${spot.pot}:${spot.call}:${spot.heroCards.join(',')}:${spot.board.join(',')}`;
     if (key === currentSpotKey) {
       return;
     }

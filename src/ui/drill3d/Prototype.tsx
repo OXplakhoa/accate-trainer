@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { PrototypeSound } from './audio/PrototypeSound';
 import {
-  DEMO_SPOTS,
-  type DemoSpot,
+  DEMO_SPOT,
   type DrillCue,
   type LessonHighlight,
   type ScenePhase,
@@ -30,7 +29,6 @@ export function Prototype() {
   const [entered, setEntered] = useState(false);
   const [phase, setPhase] = useState<ScenePhase>('arrival');
   const [highlight, setHighlight] = useState<LessonHighlight>(null);
-  const [spot, setSpot] = useState<DemoSpot>(DEMO_SPOTS[0]);
   const reducedMotion = useSyncExternalStore(subscribeToMotionPreference, readMotionPreference);
 
   useEffect(
@@ -82,7 +80,7 @@ export function Prototype() {
           <DrillScene
             phase={phase}
             highlight={highlight}
-            spot={spot}
+            spot={DEMO_SPOT}
             reducedMotion={reducedMotion}
           />
         </section>
@@ -94,8 +92,7 @@ export function Prototype() {
         >
           {entered ? (
             <DrillLesson
-              spot={spot}
-              onSpotChange={setSpot}
+              spot={DEMO_SPOT}
               onPhaseChange={setPhase}
               onHighlightChange={setHighlight}
               onCue={playCue}

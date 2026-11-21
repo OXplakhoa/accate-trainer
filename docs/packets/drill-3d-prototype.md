@@ -11,10 +11,10 @@
 
 ## Bài học
 
-- Dùng hai snapshot tình huống Turn độc lập với kết quả chia bài. Các lá của rival chưa lật. Mô hình học giả định Hero đang thua, mỗi lá cơ còn lại đều thắng, không xét blocker và không trả thêm để xem River. Có 9 outs và 46 lá chưa thấy. Pot hiển thị đã gồm mức cược của đối thủ. Ca chính pot 150 / Call 50; ca sát ngưỡng pot 160 / Call 40.
+- Dùng một snapshot tình huống Turn chung cho Cấp 1 và 3, độc lập với kết quả chia bài. Các lá của rival chưa lật. Mô hình học giả định Hero đang thua, mỗi lá cơ còn lại đều thắng, không xét blocker và không trả thêm để xem River. Có 9 outs và 46 lá chưa thấy. Pot 150 đã gồm mức cược của đối thủ; Call 50. Tình huống sát ngưỡng tự nhiên thuộc phạm vi Sandbox sau này.
 - Cấp 1 có câu riêng cho outs, % nhẩm, % cần, action; giải thích ngay đúng bước, cho thử lại và nêu vì sao mẫu số là pot sau Call. Cấp 3 cho tự chọn Call hoặc Fold khi đồng hồ chạy (mốc thử 20 giây); cuối spot mới có lời giải. Khi hết giờ ghi rõ hết giờ và mở lời giải, tránh quy kết rằng người dùng đã chọn Fold.
-- Lời giải ngắn đọc trọn, mỗi dòng là nút có thể bấm để nhấn vào outs, pot, call, hoặc tổng pot trên bàn. Hiện giải thích chính xác theo yêu cầu trong phần đọc sâu, gồm vì sao Rule of 4 chỉ áp dụng khi chắc xem cả hai lá với giá đang xét và phân biệt % hit với equity. Ví dụ 50 trên 200 = 25% và giải thích hòa vốn một lần thắng +150, ba lần thua -50. Ca sát ngưỡng dẫn từ 9 × 2 ≈ 18% đến 9/46 ≈ 19,6% dưới 20% trong mô hình và tránh làm tròn vượt ngưỡng. Nguồn Hopkins Lecture 2 và 7.
-- Không hiển thị đáp án hoặc minh họa outs khi Cấp 3 đang đếm. Chuyển cấp hoặc đổi spot phải dọn lượt hẹn giờ cũ. Tương tác bằng bàn phím, không cuộn ngang ở 320 px.
+- Lời giải ngắn đọc trọn, mỗi dòng là nút có thể bấm để nhấn vào outs, pot, call, hoặc tổng pot trên bàn. Phần đọc sâu sau quyết định giải thích vì sao Rule of 4 chỉ áp dụng khi chắc xem cả hai lá với giá đang xét và phân biệt % hit với equity. Ví dụ 50 trên 200 = 25% và giải thích hòa vốn một lần thắng +150, ba lần thua -50. Ghi chú tùy chọn giải thích Call có thể đúng nếu equity showdown trước range cược của tình huống đạt ngưỡng, kể cả những bluff bài thực sự thắng khi trượt thùng; đối thủ hay bluff chưa đủ để kết luận. Không đánh giá đối thủ hay đoán range. Nguồn Hopkins Lecture 2 và 7.
+- Không hiển thị đáp án hoặc minh họa outs khi Cấp 3 đang đếm. Chuyển cấp hoặc làm lại phải dọn lượt hẹn giờ cũ. Tương tác bằng bàn phím, không cuộn ngang ở 320 px.
 
 ## Giao diện giữa hai lane
 

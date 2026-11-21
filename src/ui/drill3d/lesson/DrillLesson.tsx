@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  DEMO_SPOTS,
   type DemoSpot,
   type DrillLessonProps,
   type LessonHighlight,
@@ -28,6 +27,17 @@ type Question = {
   why: string;
   highlight: LessonHighlight;
 };
+
+export function BluffEquityNote() {
+  return (
+    <p>
+      Ngoài mô hình này, ngay cả khi cần 20% và cơ hội trúng thùng nhẩm khoảng 18%, Call có thể
+      đúng nếu equity showdown trước range cược ở tình huống đó đạt ít nhất 20%. Equity còn tính
+      những lần bài bạn thắng được bluff dù không trúng thùng. Chỉ biết đối thủ thường bluff chưa
+      đủ: cần xét các bài bluff và bài mạnh trong range cược cụ thể, cùng kết quả khi showdown.
+    </p>
+  );
+}
 
 function questions(spot: DemoSpot): Question[] {
   const required = percent(requiredPercent(spot));
@@ -57,10 +67,7 @@ function questions(spot: DemoSpot): Question[] {
       title: 'Trong mô hình này, chọn gì?',
       options: ['Call', 'Fold'],
       answer: correctAction(spot),
-      why:
-        spot.id === 'clear'
-          ? 'Bạn nhẩm khoảng 18%, nhưng cần 25% để hòa vốn. Cơ hội thấp hơn giá Call, nên Fold.'
-          : '9/46 ≈ 19,6% vẫn thấp hơn 20%, nên Fold. Đừng làm tròn lên qua ngưỡng.',
+      why: 'Bạn nhẩm khoảng 18%, nhưng cần 25% để hòa vốn. Cơ hội thấp hơn giá Call, nên Fold.',
       highlight: 'call',
     },
   ];
@@ -73,7 +80,6 @@ interface LessonSessionProps extends DrillLessonProps {
 
 function LessonSession({
   spot,
-  onSpotChange,
   onPhaseChange,
   onHighlightChange,
   onCue,
@@ -100,7 +106,7 @@ function LessonSession({
   useEffect(() => {
     sceneCallbacks.current.onPhaseChange(finished ? 'review' : 'decision');
     sceneCallbacks.current.onHighlightChange(null);
-  }, [finished, level, spot.id]);
+  }, [finished, level]);
 
   useEffect(() => {
     if (level !== 3 || finished) return;
@@ -125,7 +131,7 @@ function LessonSession({
       window.clearInterval(timer);
       deadline.current = null;
     };
-  }, [level, finished, spot.id, sessionId]);
+  }, [level, finished, sessionId]);
 
   function reset(nextLevel: Level) {
     deadline.current = null;
@@ -168,29 +174,6 @@ function LessonSession({
             <button type="button" aria-pressed={level === 3} onClick={() => reset(3)}>
               Cấp 3 <span>Thử tốc độ</span>
             </button>
-          </div>
-        </div>
-        <div>
-          <span className="dl-label">TÌNH HUỐNG</span>
-          <div className="dl-segment" role="group" aria-label="Chọn tình huống">
-            {DEMO_SPOTS.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                aria-pressed={spot.id === item.id}
-                onClick={() => {
-                  if (spot.id !== item.id) {
-                    deadline.current = null;
-                    onHighlightChange(null);
-                    onPhaseChange('decision');
-                    onCue?.('deal');
-                    onSpotChange(item);
-                  }
-                }}
-              >
-                {item.id === 'clear' ? 'Cơ bản' : 'Sát ngưỡng'}
-              </button>
-            ))}
           </div>
         </div>
       </div>
@@ -282,7 +265,7 @@ function LessonSession({
               : level === 1
                 ? 'Bạn đã hoàn thành!'
                 : outcome === correctAction(spot)
-                  ? 'Quyết định chính xác!'
+                  ? 'Chính xác trong mô hình này!'
                   : 'Cùng xem lại nhé.'}
           </h3>
           <p>
@@ -325,7 +308,7 @@ function LessonSession({
                 <span>
                   Pot sau Call {spot.pot + spot.call}: cần {spot.call}/{spot.pot + spot.call} ={' '}
                   {percent(requiredPercent(spot))}%.{' '}
-                  {spot.id === 'close' ? '9/46 ≈ 19,6% vẫn dưới 20%.' : '≈ 18% thấp hơn mức cần.'}{' '}
+                  ≈ 18% thấp hơn mức cần.{' '}
                   Chọn {correctAction(spot)}.
                 </span>
               </button>
@@ -343,10 +326,9 @@ function LessonSession({
                     Trong mô hình một lá, nếu Call và thắng thì lời {spot.pot}; nếu thua thì mất{' '}
                     {spot.call}. Do đó cần thắng {spot.call}/({spot.pot} + {spot.call}) ={' '}
                     {percent(requiredPercent(spot))}% để hòa vốn.{' '}
-                    {spot.id === 'clear'
-                      ? 'Ví dụ: một lần thắng +150 và ba lần thua −50 cân bằng nhau.'
-                      : 'Ở đây một lần thắng +160 và bốn lần thua −40 cân bằng nhau.'}
+                    Ví dụ: một lần thắng +150 và ba lần thua −50 cân bằng nhau.
                   </p>
+                  <BluffEquityNote />
                   <p>
                     Quy tắc nhân 2 là ước lượng cho một lá. Quy tắc nhân 4 chỉ phù hợp để ước lượng
                     khi chắc chắn được xem cả hai lá tiếp theo với giá đang xét, chẳng hạn all-in ở
@@ -368,5 +350,5 @@ function LessonSession({
 
 export function DrillLesson(props: DrillLessonProps) {
   const [level, setLevel] = useState<Level>(1);
-  return <LessonSession key={props.spot.id} {...props} level={level} onLevelChange={setLevel} />;
+  return <LessonSession {...props} level={level} onLevelChange={setLevel} />;
 }
