@@ -1,9 +1,24 @@
 export type ScenePhase = 'arrival' | 'decision' | 'review';
 export type LessonHighlight = 'outs' | 'pot' | 'call' | 'total' | null;
 
-export interface DemoSpot {
+export type SceneRival = 'ca' | 'cao' | 'nong';
+
+export interface LiveSceneDetails {
+  readonly street: 'preflop' | 'flop' | 'turn' | 'river' | null;
+  readonly occupiedRivals: readonly SceneRival[];
+  readonly activeRival: SceneRival | null;
+  readonly activePlayerName: string | null;
+}
+
+export interface SceneTableSnapshot {
   readonly pot: number;
   readonly call: number;
+  readonly heroCards: readonly string[];
+  readonly board: readonly string[];
+  readonly live?: LiveSceneDetails;
+}
+
+export interface DemoSpot extends SceneTableSnapshot {
   readonly outs: number;
   readonly heroCards: readonly [string, string];
   readonly board: readonly [string, string, string, string];
@@ -20,7 +35,7 @@ export const DEMO_SPOT: DemoSpot = {
 export interface DrillSceneProps {
   readonly phase: ScenePhase;
   readonly highlight: LessonHighlight;
-  readonly spot: DemoSpot;
+  readonly spot: SceneTableSnapshot;
   readonly reducedMotion: boolean;
 }
 
