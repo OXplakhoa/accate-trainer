@@ -190,6 +190,7 @@ export interface SandboxExternalApi {
   readonly getState: () => SandboxSessionState;
   readonly getDealGeneration?: () => number;
   readonly isEffectiveReducedMotion?: () => boolean;
+  readonly unlockAudio?: () => boolean;
   readonly playTimerTick?: (urgent?: boolean) => void;
 }
 

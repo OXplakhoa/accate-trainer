@@ -724,6 +724,9 @@ export class TournamentClockDriver {
     const scheduledTurnKey = this.state.activeTurn?.turnKey ?? null;
     const scheduledTimerSeq = ++this.timerSeq;
     this.timerId = this.setTimeoutFn(() => {
+      if (scheduledTimerSeq !== this.timerSeq) {
+        return;
+      }
       this.timerId = null;
       this.handleTimerWakeup(scheduledTimerSeq, scheduledTurnKey);
     }, delay);
@@ -738,6 +741,34 @@ export class TournamentClockDriver {
     ) {
       return;
     }
+
+    const liveSession = this.controller?.getState() ?? null;
+    const liveGeneration = this.getLiveDealGeneration();
+    const liveTurnKey =
+      liveSession !== null &&
+      isFreeHeroDecisionTurn(liveSession) &&
+      liveSession.hand !== null
+        ? computeTurnKey(
+            liveSession.sessionSeed,
+            liveSession.handNumber,
+            liveSession.hand,
+            liveGeneration,
+          )
+        : null;
+    if (liveTurnKey !== scheduledTurnKey) {
+      this.commitState(
+        reconcileSessionSnapshot(
+          this.state,
+          liveSession,
+          this.getEffectiveActive(),
+          this.now(),
+          liveGeneration,
+          this.getLiveReducedMotion(),
+        ),
+      );
+      return;
+    }
+
     const nowMs = this.now();
     const result = advanceTournamentClock(this.state, nowMs);
     this.commitState(result.nextState);
@@ -747,21 +778,25 @@ export class TournamentClockDriver {
     }
 
     if (result.timeoutTurnKey !== null) {
-      const session = this.controller?.getState() ?? null;
+      const postSession = this.controller?.getState() ?? null;
       if (
-        session !== null &&
-        isFreeHeroDecisionTurn(session) &&
-        session.hand !== null &&
+        postSession !== null &&
+        isFreeHeroDecisionTurn(postSession) &&
+        postSession.hand !== null &&
         computeTurnKey(
-          session.sessionSeed,
-          session.handNumber,
-          session.hand,
+          postSession.sessionSeed,
+          postSession.handNumber,
+          postSession.hand,
           this.getLiveDealGeneration(),
         ) === result.timeoutTurnKey
       ) {
         this.controller?.autoTimeoutHeroAction(result.timeoutTurnKey);
       }
     }
+  }
+
+  public unlockAudio(): boolean {
+    return this.controller?.unlockAudio?.() ?? false;
   }
 
   public setController(api: SandboxExternalApi | null): void {

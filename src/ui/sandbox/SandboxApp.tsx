@@ -246,6 +246,7 @@ export function SandboxApp({
       getState: () => sessionRef.current,
       getDealGeneration: () => dealGenerationRef.current,
       isEffectiveReducedMotion: () => effectiveReducedMotionRef.current,
+      unlockAudio: () => audioRef.current?.unlockFromUserGesture() ?? false,
       playTimerTick: (urgent?: boolean) => {
         audioRef.current?.playTimerTick(urgent);
       },

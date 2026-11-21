@@ -36,6 +36,7 @@ export function TournamentApp({
   initialSettings,
   onPracticeSpot,
   active = true,
+  audioUnlockRef,
   storage,
 }: TournamentAppProps) {
   const initialDefaultsRef = useRef<{
@@ -73,9 +74,15 @@ export function TournamentApp({
     driverRef.current?.setActive(active);
   }, [active]);
 
-  const handleControllerReady = useCallback((api: SandboxExternalApi) => {
-    driverRef.current?.setController(api);
-  }, []);
+  const handleControllerReady = useCallback(
+    (api: SandboxExternalApi) => {
+      driverRef.current?.setController(api);
+      if (audioUnlockRef !== undefined) {
+        audioUnlockRef.current = () => driverRef.current?.unlockAudio() ?? false;
+      }
+    },
+    [audioUnlockRef],
+  );
 
   const handleHeroTurnChange = useCallback(() => {
     driverRef.current?.handleHeroTurnChange();

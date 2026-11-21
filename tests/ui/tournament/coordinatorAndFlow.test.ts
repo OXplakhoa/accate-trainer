@@ -1717,4 +1717,232 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
     expect(driver.getState().pendingTimerSeconds).toBeNull();
     driver.dispose();
   });
+
+  it('O5 mode resume regression: returning via Tournament nav activation unlocks disposed audio without extra table click while honoring mute and hidden disposal', () => {
+    const clock = createFakeClock();
+    const { FakeAudioContext, createdOscillators } = createFakeAudioEnv();
+    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+
+    const audio = new SandboxAudioEngine({
+      muted: false,
+      music: 0,
+      chips: 75,
+      cards: 75,
+      timer: 80,
+    });
+    let session = createSandboxSession({
+      seed: 'p5-o5-mode-resume',
+      settings: {
+        playerCount: 4,
+        allowOutOfTurn: false,
+        tournamentTimerSeconds: 10,
+        reducedMotion: true,
+      },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+
+    let timeoutCalls = 0;
+    const driver = new TournamentClockDriver({
+      initialDurationSeconds: 10,
+      initialReducedMotion: true,
+      now: clock.now,
+    });
+    driver.setController({
+      getState: () => session,
+      getDealGeneration: () => 1,
+      unlockAudio: () => audio.unlockFromUserGesture(),
+      playTimerTick: (urgent) => audio.playTimerTick(urgent),
+      autoTimeoutHeroAction: (expectedTurnKey) => {
+        timeoutCalls += 1;
+        session = performHeroAutoTimeout(session, expectedTurnKey, 1);
+      },
+    });
+    driver.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: session.hand!.timeline.length,
+      sessionSeed: session.sessionSeed,
+      dealKey: `${session.sessionSeed}:1:flop:3`,
+      dealGeneration: 1,
+      outcome: 'completed',
+    });
+
+    // 1. User interacts inside Tournament -> audio unlocks, clock advances 6s (4s left)
+    expect(driver.unlockAudio()).toBe(true);
+    expect(audio.isUnlocked()).toBe(true);
+    clock.advance(6_000);
+    expect(driver.getState().remainingSeconds).toBe(4);
+    expect(createdOscillators.length).toBe(0);
+
+    // 2. Switch to Drill/Sandbox -> Activity cleanup disposes AudioContext & pauses timer
+    driver.setMounted(false);
+    driver.setActive(false);
+    audio.dispose();
+    expect(audio.isUnlocked()).toBe(false);
+
+    clock.advance(30_000);
+    expect(timeoutCalls).toBe(0);
+    expect(createdOscillators.length).toBe(0);
+
+    // 3. Return through Tournament nav activation (trusted gesture calls unlockAudio BEFORE Activity reveal)
+    expect(driver.unlockAudio()).toBe(true);
+    expect(audio.isUnlocked()).toBe(true);
+    driver.setMounted(true);
+    driver.setActive(true);
+
+    // Resumed clock ticks audibly at 3s, 2s, 1s with NO extra click inside the table!
+    clock.advance(4_000);
+    expect(createdOscillators.length).toBe(3);
+    expect(timeoutCalls).toBe(1);
+    driver.dispose();
+
+    // 4. Mute is still honored after return activation
+    createdOscillators.length = 0;
+    audio.updateSettings({ muted: true, music: 0, chips: 75, cards: 75, timer: 80 });
+    let mutedSession = createSandboxSession({
+      seed: 'p5-o5-mode-resume-muted',
+      settings: {
+        playerCount: 4,
+        allowOutOfTurn: false,
+        tournamentTimerSeconds: 10,
+        reducedMotion: true,
+      },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    const mutedDriver = new TournamentClockDriver({
+      initialDurationSeconds: 10,
+      initialReducedMotion: true,
+      now: clock.now,
+    });
+    mutedDriver.setController({
+      getState: () => mutedSession,
+      getDealGeneration: () => 1,
+      unlockAudio: () => audio.unlockFromUserGesture(),
+      playTimerTick: (urgent) => audio.playTimerTick(urgent),
+      autoTimeoutHeroAction: (expectedTurnKey) => {
+        mutedSession = performHeroAutoTimeout(mutedSession, expectedTurnKey, 1);
+      },
+    });
+    mutedDriver.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: mutedSession.hand!.timeline.length,
+      sessionSeed: mutedSession.sessionSeed,
+      dealKey: `${mutedSession.sessionSeed}:1:flop:3`,
+      dealGeneration: 1,
+      outcome: 'completed',
+    });
+    mutedDriver.setActive(false);
+    audio.dispose();
+    expect(mutedDriver.unlockAudio()).toBe(true);
+    mutedDriver.setActive(true);
+    clock.advance(10_000);
+    expect(createdOscillators.length).toBe(0);
+    mutedDriver.dispose();
+    audio.dispose();
+  });
+
+  it('O5 stale wakeup regression (stale-tick-repro): prior timer wake at 3s threshold after live generation advances emits 0 ticks/timeouts and never clears newer timer handle', () => {
+    let nowMs = 0;
+    let nextTimerId = 1;
+    const scheduled: Array<{ id: number; cb: () => void; ms: number; cleared: boolean }> = [];
+
+    let liveGen = 1;
+    let liveSession = createSandboxSession({
+      seed: 'same',
+      settings: { playerCount: 4, allowOutOfTurn: false, tournamentTimerSeconds: 10 },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+
+    let ticks = 0;
+    let timeouts = 0;
+
+    const driver = new TournamentClockDriver({
+      initialDurationSeconds: 10,
+      now: () => nowMs,
+      setTimeoutFn: (cb, ms) => {
+        const entry = { id: nextTimerId++, cb, ms, cleared: false };
+        scheduled.push(entry);
+        return entry.id as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeoutFn: (id) => {
+        const found = scheduled.find((s) => s.id === (id as unknown as number));
+        if (found) {
+          found.cleared = true;
+        }
+      },
+    });
+
+    driver.setController({
+      getState: () => liveSession,
+      getDealGeneration: () => liveGen,
+      playTimerTick: () => {
+        ticks += 1;
+      },
+      autoTimeoutHeroAction: (expectedTurnKey) => {
+        timeouts += 1;
+        liveSession = performHeroAutoTimeout(liveSession, expectedTurnKey, liveGen);
+      },
+    });
+
+    driver.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: liveSession.hand!.timeline.length,
+      sessionSeed: 'same',
+      dealKey: 'same:1:flop:3',
+      dealGeneration: 1,
+      outcome: 'completed',
+    });
+
+    // Advance Gen 1 through t = 1s..6s so the next scheduled callback sits at the 3s threshold (t = 7s)
+    for (let s = 1; s <= 6; s++) {
+      nowMs = s * 1000;
+      scheduled[scheduled.length - 1]!.cb();
+    }
+    expect(ticks).toBe(0);
+    expect(driver.getState().remainingSeconds).toBe(4);
+    const staleThresholdWakeup = scheduled[scheduled.length - 1]!;
+
+    // While old timer still awaits reconciliation, live controller generation advances to Gen 2!
+    liveGen = 2;
+    liveSession = createSandboxSession({
+      seed: 'same',
+      settings: { playerCount: 4, allowOutOfTurn: false, tournamentTimerSeconds: 10 },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+
+    // Manually run prior Gen 1 timer wake at the old 3-second threshold (t = 7,000ms)
+    nowMs = 7_000;
+    staleThresholdWakeup.cb();
+    expect(ticks).toBe(0);
+    expect(timeouts).toBe(0);
+    expect(driver.getState().status).toBe('waiting-animation');
+    expect(driver.getState().activeTurn?.turnKey).toBe('same:1:flop:2:g2');
+
+    // Now Gen 2 completes and registers a newer timer handle; invoking stale Gen 1 callback again
+    // must NOT clear or disturb Gen 2's registered timer handle!
+    driver.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: liveSession.hand!.timeline.length,
+      sessionSeed: 'same',
+      dealKey: 'same:1:flop:3',
+      dealGeneration: 2,
+      outcome: 'completed',
+    });
+    expect(driver.getState().status).toBe('running');
+    const gen2Handle = scheduled[scheduled.length - 1]!;
+    expect(gen2Handle.cleared).toBe(false);
+
+    // Fire stale Gen 1 wakeup again -> 0 ticks, 0 timeouts, and gen2Handle is NOT cleared!
+    staleThresholdWakeup.cb();
+    expect(ticks).toBe(0);
+    expect(timeouts).toBe(0);
+    expect(gen2Handle.cleared).toBe(false);
+
+    // Disposing driver cleanly clears gen2Handle (proving driver's timerId wasn't nulled by stale cb)
+    driver.dispose();
+    expect(gen2Handle.cleared).toBe(true);
+  });
 });

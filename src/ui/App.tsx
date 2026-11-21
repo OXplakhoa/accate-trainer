@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, useCallback, useState } from 'react';
+import { Activity, lazy, Suspense, useCallback, useRef, useState } from 'react';
 import type { HandState } from '../engine';
 import './app.css';
 
@@ -17,6 +17,7 @@ export function App() {
   const [openedSandbox, setOpenedSandbox] = useState(false);
   const [openedTournament, setOpenedTournament] = useState(false);
   const [practiceSpot, setPracticeSpot] = useState<PracticeSpot>();
+  const tournamentAudioUnlockRef = useRef<(() => boolean) | null>(null);
 
   const openPracticeFromSandbox = useCallback((hand: HandState, heroId: string) => {
     setPracticeSpot({ hand, heroId, source: 'sandbox' });
@@ -34,9 +35,12 @@ export function App() {
   }, []);
 
   const openTournament = useCallback(() => {
+    if (openedTournament) {
+      tournamentAudioUnlockRef.current?.();
+    }
     setOpenedTournament(true);
     setMode('tournament');
-  }, []);
+  }, [openedTournament]);
 
   const backToTable =
     practiceSpot === undefined
@@ -79,6 +83,7 @@ export function App() {
           <Activity mode={mode === 'tournament' ? 'visible' : 'hidden'}>
             <TournamentApp
               active={mode === 'tournament'}
+              audioUnlockRef={tournamentAudioUnlockRef}
               onPracticeSpot={openPracticeFromTournament}
             />
           </Activity>

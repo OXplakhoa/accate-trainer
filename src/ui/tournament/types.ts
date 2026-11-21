@@ -44,6 +44,8 @@ export interface TournamentAppProps {
   readonly onPracticeSpot?: (hand: HandState, heroId: string) => void;
   /** Whether Tournament mode is currently visible/active (pauses & cleans timer when hidden). */
   readonly active?: boolean;
+  /** Optional ref populated with a synchronous audio-unlock callback for revisit gestures. */
+  readonly audioUnlockRef?: { current: (() => boolean) | null };
   /** Optional storage override for testing persistence/fallback. */
   readonly storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
 }
