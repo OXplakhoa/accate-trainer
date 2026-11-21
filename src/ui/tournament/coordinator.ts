@@ -44,8 +44,10 @@ export function computeTurnKey(
   sessionSeed: string,
   handNumber: number,
   hand: HandState,
+  dealGeneration?: number,
 ): string {
-  return `${sessionSeed}:${handNumber}:${hand.street}:${computeNonExchangeStepCount(hand.timeline)}`;
+  const base = `${sessionSeed}:${handNumber}:${hand.street}:${computeNonExchangeStepCount(hand.timeline)}`;
+  return dealGeneration !== undefined ? `${base}:g${dealGeneration}` : base;
 }
 
 export function isFreeHeroDecisionTurn(session: SandboxSessionState | null): boolean {
@@ -130,12 +132,16 @@ export function reconcileSessionSnapshot(
   active: boolean,
   nowMs: number,
   liveDealGeneration?: number,
+  effectiveReducedMotionOverride?: boolean,
 ): TournamentClockState {
   const configuredDurationSeconds =
     session?.appliedSettings.tournamentTimerSeconds ?? state.configuredDurationSeconds;
   const pendingTimerSeconds = readPendingTimerSeconds(session, configuredDurationSeconds);
   const hasBindingOutOfTurn = hasBindingHeroOutOfTurnDeclaration(session);
-  const reducedMotion = session?.appliedSettings.reducedMotion ?? state.reducedMotion;
+  const reducedMotion =
+    effectiveReducedMotionOverride ??
+    session?.appliedSettings.reducedMotion ??
+    state.reducedMotion;
 
   const currentBettingDealKey =
     session !== null &&
@@ -190,7 +196,12 @@ export function reconcileSessionSnapshot(
     hand.street,
     hand.board.length,
   );
-  const nextTurnKey = computeTurnKey(session.sessionSeed, session.handNumber, hand);
+  const nextTurnKey = computeTurnKey(
+    session.sessionSeed,
+    session.handNumber,
+    hand,
+    liveDealGeneration,
+  );
   const isDealCompleted = validCompletedDealKey === nextDealKey;
   const hadCancelledDeclaration = hand.awaitingDecision?.hadCancelledDeclaration ?? false;
 
@@ -636,6 +647,7 @@ export class TournamentClockDriver {
   private mounted = true;
   private controller: SandboxExternalApi | null = null;
   private timerId: ReturnType<typeof setTimeout> | null = null;
+  private timerSeq = 0;
 
   private readonly now: () => number;
   private readonly setTimeoutFn: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -670,7 +682,12 @@ export class TournamentClockDriver {
     return this.controller?.getDealGeneration?.();
   }
 
+  private getLiveReducedMotion(): boolean | undefined {
+    return this.controller?.isEffectiveReducedMotion?.();
+  }
+
   private clearScheduledTimer(): void {
+    this.timerSeq += 1;
     if (this.timerId !== null) {
       this.clearTimeoutFn(this.timerId);
       this.timerId = null;
@@ -678,9 +695,18 @@ export class TournamentClockDriver {
   }
 
   private commitState(next: TournamentClockState): void {
-    const changed = next !== this.state;
+    const prev = this.state;
+    const changed = next !== prev;
     this.state = next;
-    this.syncTimer();
+    const scheduleAffected =
+      !this.getEffectiveActive() ||
+      next.status !== prev.status ||
+      next.deadlineMs !== prev.deadlineMs ||
+      next.activeTurn?.turnKey !== prev.activeTurn?.turnKey ||
+      (next.status === 'running' && this.timerId === null);
+    if (scheduleAffected) {
+      this.syncTimer();
+    }
     if (changed) {
       this.onStateChange?.(next);
     }
@@ -695,14 +721,21 @@ export class TournamentClockDriver {
     if (delay === null) {
       return;
     }
+    const scheduledTurnKey = this.state.activeTurn?.turnKey ?? null;
+    const scheduledTimerSeq = ++this.timerSeq;
     this.timerId = this.setTimeoutFn(() => {
       this.timerId = null;
-      this.handleTimerWakeup();
+      this.handleTimerWakeup(scheduledTimerSeq, scheduledTurnKey);
     }, delay);
   }
 
-  private handleTimerWakeup(): void {
-    if (!this.getEffectiveActive()) {
+  private handleTimerWakeup(timerSeq: number, scheduledTurnKey: string | null): void {
+    if (
+      !this.getEffectiveActive() ||
+      timerSeq !== this.timerSeq ||
+      scheduledTurnKey === null ||
+      this.state.activeTurn?.turnKey !== scheduledTurnKey
+    ) {
       return;
     }
     const nowMs = this.now();
@@ -719,8 +752,12 @@ export class TournamentClockDriver {
         session !== null &&
         isFreeHeroDecisionTurn(session) &&
         session.hand !== null &&
-        computeTurnKey(session.sessionSeed, session.handNumber, session.hand) ===
-          result.timeoutTurnKey
+        computeTurnKey(
+          session.sessionSeed,
+          session.handNumber,
+          session.hand,
+          this.getLiveDealGeneration(),
+        ) === result.timeoutTurnKey
       ) {
         this.controller?.autoTimeoutHeroAction(result.timeoutTurnKey);
       }
@@ -736,6 +773,7 @@ export class TournamentClockDriver {
       this.getEffectiveActive(),
       this.now(),
       this.getLiveDealGeneration(),
+      this.getLiveReducedMotion(),
     );
     this.commitState(next);
   }
@@ -748,6 +786,7 @@ export class TournamentClockDriver {
       this.getEffectiveActive(),
       this.now(),
       this.getLiveDealGeneration(),
+      this.getLiveReducedMotion(),
     );
     this.commitState(next);
   }
@@ -795,6 +834,7 @@ export class TournamentClockDriver {
       true,
       this.now(),
       this.getLiveDealGeneration(),
+      this.getLiveReducedMotion(),
     );
     this.commitState(resumed);
   }

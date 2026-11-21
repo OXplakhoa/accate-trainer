@@ -157,6 +157,9 @@ export function SandboxApp({
   const sessionRef = useRef<SandboxSessionState>(session);
   sessionRef.current = session;
 
+  const effectiveReducedMotionRef = useRef<boolean>(effectiveReducedMotion);
+  effectiveReducedMotionRef.current = effectiveReducedMotion;
+
   const onDealAnimationEndRef = useRef<SandboxAppProps['onDealAnimationEnd']>(onDealAnimationEnd);
   onDealAnimationEndRef.current = onDealAnimationEnd;
 
@@ -228,18 +231,21 @@ export function SandboxApp({
     }
     onControllerReady({
       autoTimeoutHeroAction: (expectedTurnKey?: string) => {
-        const capturedTurnKey =
-          expectedTurnKey ?? getHeroTurnIdentity(sessionRef.current) ?? undefined;
         const capturedGeneration = dealGenerationRef.current;
+        const capturedTurnKey =
+          expectedTurnKey ??
+          getHeroTurnIdentity(sessionRef.current, capturedGeneration) ??
+          undefined;
         setSession((prev) => {
           if (dealGenerationRef.current !== capturedGeneration) {
             return prev;
           }
-          return performHeroAutoTimeout(prev, capturedTurnKey);
+          return performHeroAutoTimeout(prev, capturedTurnKey, dealGenerationRef.current);
         });
       },
       getState: () => sessionRef.current,
       getDealGeneration: () => dealGenerationRef.current,
+      isEffectiveReducedMotion: () => effectiveReducedMotionRef.current,
       playTimerTick: (urgent?: boolean) => {
         audioRef.current?.playTimerTick(urgent);
       },
@@ -285,6 +291,9 @@ export function SandboxApp({
       ? `${session.sessionSeed}:${session.handNumber}:${activeHand.phase}:${activeHand.activePlayerId}:${activeHand.timeline.length}:${dealGenerationRef.current}`
       : 'between';
 
+  const appliedTimerSeconds = session.appliedSettings.tournamentTimerSeconds;
+  const pendingTimerSeconds = session.pendingSettings?.tournamentTimerSeconds ?? null;
+
   useEffect(() => {
     if (!onHeroTurnChange) {
       return;
@@ -296,7 +305,15 @@ export function SandboxApp({
       legalActions: legal,
       hadCancelledDeclaration: activeHand?.awaitingDecision?.hadCancelledDeclaration ?? false,
     });
-  }, [heroTurnKey, isHeroTurn, activeHand, onHeroTurnChange]);
+  }, [
+    heroTurnKey,
+    isHeroTurn,
+    activeHand,
+    appliedTimerSeconds,
+    pendingTimerSeconds,
+    effectiveReducedMotion,
+    onHeroTurnChange,
+  ]);
 
   // Pause bot auto-stepping while modals are open or while hero is staging an out-of-turn bet
   const heroStagingOutOfTurn =

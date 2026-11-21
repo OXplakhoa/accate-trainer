@@ -189,6 +189,7 @@ export interface SandboxExternalApi {
   readonly autoTimeoutHeroAction: (expectedTurnKey?: string) => void;
   readonly getState: () => SandboxSessionState;
   readonly getDealGeneration?: () => number;
+  readonly isEffectiveReducedMotion?: () => boolean;
   readonly playTimerTick?: (urgent?: boolean) => void;
 }
 

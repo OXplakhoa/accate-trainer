@@ -162,8 +162,13 @@ function createTournamentHarness(options: HarnessOptions) {
     getDealGeneration: () => dealGeneration,
     autoTimeoutHeroAction: (expectedTurnKey?: string) => {
       autoTimeoutCalls += 1;
-      const targetTurnKey = expectedTurnKey ?? getHeroTurnIdentity(session) ?? undefined;
-      session = performHeroAutoTimeout(session, targetTurnKey);
+      const capturedGen = dealGeneration;
+      const targetTurnKey =
+        expectedTurnKey ?? getHeroTurnIdentity(session, capturedGen) ?? undefined;
+      if (dealGeneration !== capturedGen) {
+        return;
+      }
+      session = performHeroAutoTimeout(session, targetTurnKey, dealGeneration);
       assertAllInvariants(session, `after autoTimeout #${autoTimeoutCalls}`);
       syncEffects();
     },
@@ -1407,5 +1412,309 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
     expect(afterStaleHand1Timeout.handNumber).toBe(2);
     expect(afterStaleHand1Timeout.hand?.activePlayerId).toBe(HERO_PLAYER_ID);
     assertAllInvariants(afterStaleHand1Timeout, 'after rejected stale hand1 timeout on hand2');
+  });
+
+  it('Terra generation-aware turn identity regression: Gen 1 timeout + identical seed reset to Gen 2 starts full clock in both completion orderings and blocks late Gen 1 callbacks/ticks', () => {
+    const clock = createFakeClock();
+    const timerCallbacks: Array<{ cb: () => void; ms: number }> = [];
+
+    // Variant A: onHeroTurnChange -> onDealAnimationEnd('completed') on Gen 2 after Gen 1 timed out
+    const sGen1 = createSandboxSession({
+      seed: 'same',
+      settings: {
+        playerCount: 4,
+        allowOutOfTurn: false,
+        tournamentTimerSeconds: 10,
+      },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    const h = createTournamentHarness({ session: sGen1, clock });
+
+    // Gen 1 completes deal and times out at 10s
+    clock.advance(DEAL_MS);
+    expect(h.driver.getState().status).toBe('running');
+    const gen1TurnKey = h.driver.getState().activeTurn?.turnKey;
+    expect(gen1TurnKey).toBe('same:1:flop:2:g1');
+    clock.advance(10_000);
+    expect(h.getAutoTimeoutCalls()).toBe(1);
+    expect(h.driver.getState().timedOutTurnKey).toBe('same:1:flop:2:g1');
+    expect(h.getTickCalls().length).toBe(3);
+
+    // Reset to Gen 2 with the IDENTICAL seed 'same', hand 1, flop, step 2
+    h.resetSession('same', {
+      playerCount: 4,
+      allowOutOfTurn: false,
+      tournamentTimerSeconds: 10,
+    });
+    expect(h.getDealGeneration()).toBe(2);
+    expect(h.driver.getState().status).toBe('waiting-animation');
+    expect(h.driver.getState().activeTurn?.turnKey).toBe('same:1:flop:2:g2');
+
+    // Re-running handleHeroTurnChange while waiting must NOT revert to timed-out
+    h.driver.handleHeroTurnChange();
+    expect(h.driver.getState().status).toBe('waiting-animation');
+
+    // Gen 2 deal completes -> must enter 'running' with full 10s (NOT stuck waiting-animation or timed-out!)
+    clock.advance(DEAL_MS);
+    expect(h.driver.getState().status).toBe('running');
+    expect(h.driver.getState().remainingSeconds).toBe(10);
+
+    // Late Gen 1 action guard: passing Gen 1 turnKey to performHeroAutoTimeout during Gen 2 must no-op
+    const gen2BeforeLate = h.getSession();
+    const afterLateGen1Guard = performHeroAutoTimeout(
+      gen2BeforeLate,
+      gen1TurnKey,
+      h.getDealGeneration(),
+    );
+    expect(afterLateGen1Guard).toBe(gen2BeforeLate);
+    expect(h.driver.getState().status).toBe('running');
+
+    // Gen 2 completes its own full 10s countdown and times out cleanly
+    clock.advance(10_000);
+    expect(h.getAutoTimeoutCalls()).toBe(2);
+    expect(h.driver.getState().timedOutTurnKey).toBe('same:1:flop:2:g2');
+    h.cleanup();
+
+    // Variant B: Reverse completion ordering (onDealAnimationEnd BEFORE onHeroTurnChange) + stale timer wakeup guard
+    let currentGen = 1;
+    let sessionRev = createSandboxSession({
+      seed: 'same',
+      settings: { playerCount: 4, allowOutOfTurn: false, tournamentTimerSeconds: 10 },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    let revTimeoutCalls = 0;
+    let revTickCalls = 0;
+
+    const driverRev = new TournamentClockDriver({
+      initialDurationSeconds: 10,
+      now: clock.now,
+      setTimeoutFn: (cb, ms) => {
+        timerCallbacks.push({ cb, ms });
+        return timerCallbacks.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeoutFn: () => {},
+    });
+
+    driverRev.setController({
+      getState: () => sessionRev,
+      getDealGeneration: () => currentGen,
+      autoTimeoutHeroAction: (expectedTurnKey?: string) => {
+        revTimeoutCalls += 1;
+        sessionRev = performHeroAutoTimeout(sessionRev, expectedTurnKey, currentGen);
+      },
+      playTimerTick: () => {
+        revTickCalls += 1;
+      },
+    });
+
+    // Complete Gen 1 deal and run up to 7s (so a timer callback for Gen 1 is captured at 8s)
+    driverRev.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: sessionRev.hand!.timeline.length,
+      sessionSeed: 'same',
+      dealKey: 'same:1:flop:3',
+      dealGeneration: 1,
+      outcome: 'completed',
+    });
+    expect(driverRev.getState().status).toBe('running');
+    const staleGen1TimerCb = timerCallbacks[timerCallbacks.length - 1]!.cb;
+
+    // Now simulate Gen 1 timing out directly and resetting to Gen 2 with reverse callback order
+    for (let sec = 0; sec < 10; sec++) {
+      clock.advance(1000);
+      timerCallbacks[timerCallbacks.length - 1]!.cb();
+    }
+    expect(revTimeoutCalls).toBe(1);
+    expect(driverRev.getState().timedOutTurnKey).toBe('same:1:flop:2:g1');
+    const ticksBeforeGen2 = revTickCalls;
+
+    // Reset to Gen 2 with identical seed 'same'
+    currentGen = 2;
+    sessionRev = createSandboxSession({
+      seed: 'same',
+      settings: { playerCount: 4, allowOutOfTurn: false, tournamentTimerSeconds: 10 },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+    // Reverse order: Gen 2 deal completion arrives BEFORE handleHeroTurnChange
+    driverRev.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: sessionRev.hand!.timeline.length,
+      sessionSeed: 'same',
+      dealKey: 'same:1:flop:3',
+      dealGeneration: 2,
+      outcome: 'completed',
+    });
+    driverRev.handleHeroTurnChange();
+    expect(driverRev.getState().status).toBe('running');
+    expect(driverRev.getState().remainingSeconds).toBe(10);
+    expect(driverRev.getState().activeTurn?.turnKey).toBe('same:1:flop:2:g2');
+
+    // Invoking the stale Gen 1 timer callback while Gen 2 is running MUST NOT act or emit a tick!
+    staleGen1TimerCb();
+    expect(revTickCalls).toBe(ticksBeforeGen2);
+    expect(revTimeoutCalls).toBe(1);
+    expect(driverRev.getState().status).toBe('running');
+    driverRev.dispose();
+  });
+
+  it('Neon O4 settings-only sync regression: syncs pendingTimerSeconds and effectiveReducedMotion immediately without interrupting active deadline, and handles cancellation', () => {
+    const clock = createFakeClock();
+    const session = createSandboxSession({
+      seed: 'p5-o4-settings-sync',
+      settings: {
+        playerCount: 4,
+        allowOutOfTurn: false,
+        tournamentTimerSeconds: 20,
+        reducedMotion: false,
+      },
+      fixtures: { openerId: HERO_PLAYER_ID },
+    });
+
+    // Track state updates emitted by TournamentClockDriver
+    let liveSession = session;
+    let effectiveRm = false;
+    let timerRescheduleCount = 0;
+    const states: Array<{
+      pendingTimerSeconds: number | null;
+      configuredDurationSeconds: number;
+      reducedMotion: boolean;
+      deadlineMs: number | null;
+      status: string;
+    }> = [];
+
+    const driver = new TournamentClockDriver({
+      initialDurationSeconds: 20,
+      initialReducedMotion: false,
+      now: clock.now,
+      setTimeoutFn: (cb, ms) => {
+        timerRescheduleCount += 1;
+        return globalThis.setTimeout(cb, ms);
+      },
+      onStateChange: (s) => {
+        states.push({
+          pendingTimerSeconds: s.pendingTimerSeconds,
+          configuredDurationSeconds: s.configuredDurationSeconds,
+          reducedMotion: s.reducedMotion,
+          deadlineMs: s.deadlineMs,
+          status: s.status,
+        });
+      },
+    });
+
+    driver.setController({
+      getState: () => liveSession,
+      getDealGeneration: () => 1,
+      isEffectiveReducedMotion: () => effectiveRm,
+      autoTimeoutHeroAction: (expectedTurnKey?: string) => {
+        liveSession = performHeroAutoTimeout(liveSession, expectedTurnKey, 1);
+      },
+    });
+    driver.handleDealAnimationEnd({
+      handNumber: 1,
+      street: 'flop',
+      eventCount: liveSession.hand!.timeline.length,
+      sessionSeed: liveSession.sessionSeed,
+      dealKey: `${liveSession.sessionSeed}:1:flop:3`,
+      dealGeneration: 1,
+      outcome: 'completed',
+    });
+
+    expect(driver.getState().status).toBe('running');
+    const originalDeadline = driver.getState().deadlineMs;
+    expect(originalDeadline).toBe(20_000);
+
+    // Advance 4s -> 16s remaining
+    clock.advance(4_000);
+    expect(driver.getState().remainingSeconds).toBe(16);
+    const reschedulesBeforeSettingsEdit = timerRescheduleCount;
+
+    // Mid-hand settings-only update (same hand object, same turn identity):
+    // Change timer 20 -> 10 (queued in pendingSettings) AND toggle reducedMotion -> true
+    liveSession = applySettingsUpdate(
+      liveSession,
+      {
+        ...liveSession.appliedSettings,
+        tournamentTimerSeconds: 10,
+        reducedMotion: true,
+      },
+      'apply-boundary',
+    );
+    effectiveRm = true;
+    driver.handleHeroTurnChange();
+
+    // Immediately reflects pendingTimerSeconds = 10 & reducedMotion = true while keeping current 20s deadline untouched!
+    expect(driver.getState().pendingTimerSeconds).toBe(10);
+    expect(driver.getState().configuredDurationSeconds).toBe(20);
+    expect(driver.getState().reducedMotion).toBe(true);
+    expect(driver.getState().deadlineMs).toBe(originalDeadline);
+    expect(driver.getState().status).toBe('running');
+    // Must NOT restart/churn the running timer on metadata-only update
+    expect(timerRescheduleCount).toBe(reschedulesBeforeSettingsEdit);
+
+    // Cancel pending timer setting by changing back 10 -> 20 mid-hand: pendingSettings clears to null immediately!
+    liveSession = applySettingsUpdate(
+      liveSession,
+      {
+        ...liveSession.appliedSettings,
+        tournamentTimerSeconds: 20,
+        reducedMotion: true,
+      },
+      'apply-boundary',
+    );
+    driver.handleHeroTurnChange();
+    expect(driver.getState().pendingTimerSeconds).toBeNull();
+    expect(driver.getState().configuredDurationSeconds).toBe(20);
+    expect(driver.getState().deadlineMs).toBe(originalDeadline);
+    expect(timerRescheduleCount).toBe(reschedulesBeforeSettingsEdit);
+
+    // Non-timer rule change (preflop ON) keeps pendingTimerSeconds === null
+    liveSession = applySettingsUpdate(
+      liveSession,
+      {
+        ...liveSession.appliedSettings,
+        enablePreflopBetting: true,
+      },
+      'apply-boundary',
+    );
+    driver.handleHeroTurnChange();
+    expect(driver.getState().pendingTimerSeconds).toBeNull();
+    expect(driver.getState().deadlineMs).toBe(originalDeadline);
+
+    // Re-queue 15s, confirm remaining 16s still expires at the original 20_000ms mark, then hand #2 uses 15s
+    liveSession = applySettingsUpdate(
+      liveSession,
+      {
+        ...liveSession.appliedSettings,
+        tournamentTimerSeconds: 15,
+      },
+      'apply-boundary',
+    );
+    driver.handleHeroTurnChange();
+    expect(driver.getState().pendingTimerSeconds).toBe(15);
+
+    clock.advance(16_000);
+    expect(driver.getState().status).toBe('timed-out');
+    expect(states[states.length - 1]?.pendingTimerSeconds).toBe(15);
+
+    let finishGuard = 0;
+    while (
+      liveSession.phase === 'in-hand' &&
+      liveSession.hand?.phase === 'betting' &&
+      finishGuard < 60
+    ) {
+      finishGuard += 1;
+      if (liveSession.hand.activePlayerId === HERO_PLAYER_ID) {
+        liveSession = performHeroAction(liveSession, 'fold');
+      } else {
+        liveSession = stepOneBotTurn(liveSession);
+      }
+    }
+    liveSession = startNextHand(liveSession, { openerId: HERO_PLAYER_ID });
+    driver.handleHeroTurnChange();
+    expect(driver.getState().configuredDurationSeconds).toBe(15);
+    expect(driver.getState().pendingTimerSeconds).toBeNull();
+    driver.dispose();
   });
 });
