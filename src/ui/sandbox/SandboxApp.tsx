@@ -601,9 +601,7 @@ export function SandboxApp({
   const actorId = activeHand?.phase === 'betting' ? activeHand.activePlayerId : null;
   const tableView = renderTableView?.({
     pot: potValue,
-    call: activeHand?.phase === 'betting' && heroSeat?.status === 'active'
-      ? Math.min(Math.max(0, activeHand.currentBet - heroSeat.streetContribution), chipValue(heroSeat.stack))
-      : 0,
+    call: validation.callAmount ?? 0,
     heroCards: heroSeat?.holeCards.map(formatCardShort) ?? [],
     board: activeHand?.board.map(formatCardShort) ?? [],
     street: activeHand?.street ?? null,
