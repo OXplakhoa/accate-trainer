@@ -38,3 +38,42 @@ body {
 .accate-sandbox-3d-preview .accate-sandbox {
   min-height: calc(100vh - 56px);
 }
+
+.accate-sandbox-3d-preview .sb-table-rail {
+  padding: 0;
+  border-radius: 18px;
+  background: var(--sb-panel);
+}
+
+.accate-sandbox-3d-preview .sb-table-felt,
+.accate-sandbox-3d-preview .sb-felt-center {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.accate-sandbox-3d-preview .sb-pot-display,
+.accate-sandbox-3d-preview .sb-turn-status {
+  padding-inline: 12px;
+}
+
+.accate-sandbox-3d-preview .sb-turn-status {
+  padding-block-end: 12px;
+}
+
+@media (min-width: 1080px) {
+  .accate-sandbox-3d-preview .sb-main {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+  }
+
+  .accate-sandbox-3d-preview .sb-primary-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(310px, 365px);
+    align-items: start;
+  }
+
+  .accate-sandbox-3d-preview .sb-seats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
