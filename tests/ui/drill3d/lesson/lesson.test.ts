@@ -5,6 +5,7 @@ import { DEMO_SPOTS } from '../../../../src/ui/drill3d/contract';
 import { DrillLesson } from '../../../../src/ui/drill3d/lesson/DrillLesson';
 import {
   correctAction,
+  countdownCue,
   DURATION_MS,
   exactPercent,
   requiredPercent,
@@ -34,6 +35,17 @@ describe('3D lesson', () => {
     expect(secondsRemaining(21_000, 20_999)).toBe(1);
     expect(secondsRemaining(21_000, 21_000)).toBe(0);
     expect(secondsRemaining(21_000, 25_000)).toBe(0);
+  });
+
+  it('emits one cue per observed final second and does not replay missed ticks', () => {
+    expect(
+      [20, 4, 3, 3, 2, 2, 1, 1, 0, 0]
+        .slice(1)
+        .map((n, i) => countdownCue([20, 4, 3, 3, 2, 2, 1, 1, 0][i]!, n))
+        .filter(Boolean),
+    ).toEqual(['tick', 'tick', 'tick', 'expired']);
+    expect(countdownCue(4, 1)).toBe('tick');
+    expect(countdownCue(3, 0)).toBe('expired');
   });
 
   it('renders accessible controls and states the educational assumptions', () => {

@@ -8,6 +8,7 @@ import {
 import {
   cardsUnseen,
   correctAction,
+  countdownCue,
   DURATION_MS,
   exactPercent,
   requiredPercent,
@@ -75,6 +76,7 @@ function LessonSession({
   onSpotChange,
   onPhaseChange,
   onHighlightChange,
+  onCue,
   level,
   onLevelChange,
 }: LessonSessionProps) {
@@ -85,6 +87,10 @@ function LessonSession({
   const [remaining, setRemaining] = useState(20);
   const deadline = useRef<number | null>(null);
   const [sessionId, setSessionId] = useState(0);
+  const cueCallback = useRef(onCue);
+  useEffect(() => {
+    cueCallback.current = onCue;
+  }, [onCue]);
   const sceneCallbacks = useRef({ onPhaseChange, onHighlightChange });
   useEffect(() => {
     sceneCallbacks.current = { onPhaseChange, onHighlightChange };
@@ -101,10 +107,14 @@ function LessonSession({
     const end = Date.now() + DURATION_MS;
     deadline.current = end;
     setRemaining(20);
+    let lastSecond = 20;
     const tick = () => {
       if (deadline.current !== end) return;
       const seconds = secondsRemaining(end, Date.now());
       setRemaining(seconds);
+      const cue = countdownCue(lastSecond, seconds);
+      if (cue) cueCallback.current?.(cue);
+      lastSecond = seconds;
       if (seconds === 0) {
         deadline.current = null;
         setOutcome('expired');
@@ -119,6 +129,7 @@ function LessonSession({
 
   function reset(nextLevel: Level) {
     deadline.current = null;
+    onCue?.('deal');
     onLevelChange(nextLevel);
     setStep(0);
     setFeedback(null);
@@ -137,6 +148,7 @@ function LessonSession({
     const expired = now >= deadline.current;
     setRemaining(secondsRemaining(deadline.current, now));
     deadline.current = null;
+    onCue?.(expired ? 'expired' : action === 'Call' ? 'chip' : 'fold');
     setOutcome(expired ? 'expired' : action);
   }
 
@@ -171,6 +183,7 @@ function LessonSession({
                     deadline.current = null;
                     onHighlightChange(null);
                     onPhaseChange('decision');
+                    onCue?.('deal');
                     onSpotChange(item);
                   }
                 }}
@@ -204,6 +217,7 @@ function LessonSession({
                 disabled={feedback === 'correct'}
                 onClick={() => {
                   const right = option === question.answer;
+                  onCue?.(right ? 'correct' : 'incorrect');
                   setFeedback(right ? 'correct' : 'wrong');
                   onHighlightChange(question.highlight);
                 }}
