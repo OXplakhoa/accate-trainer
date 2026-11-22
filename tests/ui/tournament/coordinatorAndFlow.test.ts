@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { audioEnvironment } from '../audio/fakeAudio';
 import {
   checkHandInvariants,
   checkInv1,
@@ -305,70 +306,6 @@ function createTournamentHarness(options: HarnessOptions) {
       driver.dispose();
     },
   };
-}
-
-function createFakeAudioEnv() {
-  const createdOscillators: Array<{
-    freqCalls: Array<{ value: number; time: number }>;
-    stopCalls: number;
-  }> = [];
-
-  class FakeAudioContext {
-    public state = 'suspended';
-    public currentTime = 0;
-    public destination = {} as AudioNode;
-    public resume = vi.fn(async () => {
-      this.state = 'running';
-    });
-    public close = vi.fn(async () => {
-      this.state = 'closed';
-    });
-    public createOscillator() {
-      const oscRecord = {
-        freqCalls: [] as Array<{ value: number; time: number }>,
-        stopCalls: 0,
-      };
-      createdOscillators.push(oscRecord);
-      return {
-        type: 'sine',
-        frequency: {
-          value: 440,
-          setValueAtTime: (value: number, time: number) => {
-            oscRecord.freqCalls.push({ value, time });
-          },
-          exponentialRampToValueAtTime: vi.fn(),
-        },
-        connect: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn(() => {
-          oscRecord.stopCalls += 1;
-        }),
-        disconnect: vi.fn(),
-      } as unknown as OscillatorNode;
-    }
-    public createGain() {
-      return {
-        gain: {
-          value: 0,
-          setValueAtTime: vi.fn(),
-          linearRampToValueAtTime: vi.fn(),
-          exponentialRampToValueAtTime: vi.fn(),
-          setTargetAtTime: vi.fn(),
-        },
-        connect: vi.fn(),
-        disconnect: vi.fn(),
-      } as unknown as GainNode;
-    }
-    public createBiquadFilter() {
-      return {
-        type: 'lowpass',
-        frequency: { value: 320 },
-        connect: vi.fn(),
-      } as unknown as BiquadFilterNode;
-    }
-  }
-
-  return { FakeAudioContext, createdOscillators };
 }
 
 describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Invariants', () => {
@@ -827,8 +764,7 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
 
   it('O5: last 3 seconds play timer audio only after user gesture, respecting mute and timer volume', () => {
     const clock = createFakeClock();
-    const { FakeAudioContext, createdOscillators } = createFakeAudioEnv();
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const { oscillators: createdOscillators } = audioEnvironment({ state: 'suspended' });
 
     const audio = new SandboxAudioEngine({
       muted: false,
@@ -1720,8 +1656,7 @@ describe('P5 Tournament — Clock Synchronization, O1–O6, X7, Lifecycle & Inva
 
   it('O5 mode resume regression: returning via Tournament nav activation unlocks disposed audio without extra table click while honoring mute and hidden disposal', () => {
     const clock = createFakeClock();
-    const { FakeAudioContext, createdOscillators } = createFakeAudioEnv();
-    vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+    const { oscillators: createdOscillators } = audioEnvironment({ state: 'suspended' });
 
     const audio = new SandboxAudioEngine({
       muted: false,

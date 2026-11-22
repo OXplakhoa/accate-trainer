@@ -1,69 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PrototypeSound } from '../../../../src/ui/drill3d/audio/PrototypeSound';
 import type { DrillCue } from '../../../../src/ui/drill3d/contract';
+import { audioEnvironment } from '../../audio/fakeAudio';
 
-function audioEnvironment() {
-  const voices: Array<{
-    start: ReturnType<typeof vi.fn>;
-    stop: ReturnType<typeof vi.fn>;
-    disconnect: ReturnType<typeof vi.fn>;
-    onended: (() => void) | null;
-  }> = [];
-  const listeners = new Map<string, () => void>();
-  const doc = {
-    hidden: false,
-    addEventListener: vi.fn((name: string, fn: () => void) => listeners.set(name, fn)),
-    removeEventListener: vi.fn((name: string) => listeners.delete(name)),
-  };
-  const param = () => ({
-    value: 0,
-    setValueAtTime: vi.fn(),
-    exponentialRampToValueAtTime: vi.fn(),
-  });
-  const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
-  const source = () => {
-    const result = {
-      ...node(),
-      start: vi.fn(),
-      stop: vi.fn(),
-      onended: null,
-      frequency: param(),
-      type: '',
-      buffer: null,
-    };
-    voices.push(result);
-    return result;
-  };
-  const context = {
-    state: 'running',
-    currentTime: 5,
-    sampleRate: 48000,
-    destination: node(),
-    createGain: () => ({ ...node(), gain: param() }),
-    createOscillator: source,
-    createBufferSource: source,
-    createBiquadFilter: () => ({ ...node(), type: '', frequency: param() }),
-    createBuffer: (_channels: number, length: number) => ({
-      getChannelData: () => new Float32Array(length),
-    }),
-    resume: vi.fn().mockResolvedValue(undefined),
-    close: vi.fn().mockResolvedValue(undefined),
-  };
-  const AudioContextMock = vi.fn(function () {
-    return context;
-  });
-  vi.stubGlobal('window', { AudioContext: AudioContextMock });
-  vi.stubGlobal('document', doc);
-  return { context, voices, doc, listeners, AudioContextMock };
-}
-
-beforeEach(() => {
-  let seed = 12345;
-  vi.spyOn(Math, 'random').mockImplementation(() => {
-    seed = (seed * 16807) % 2147483647;
-    return seed / 2147483647;
-  });
-});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -115,19 +54,18 @@ describe('PrototypeSound', () => {
     expect(env.voices).toHaveLength(2);
     sound.setMuted(false);
     sound.play('chip');
-    env.doc.hidden = true;
-    env.listeners.get('visibilitychange')?.();
+    env.setHidden(true);
     expect(env.voices[2]!.stop).toHaveBeenCalledTimes(2);
     const count = env.voices.length;
     sound.play('tick');
     expect(env.voices).toHaveLength(count);
-    env.doc.hidden = false;
+    env.setHidden(false);
     sound.play('expired');
     const pending = env.voices.at(-1)!;
     sound.dispose();
     expect(pending.stop).toHaveBeenCalledTimes(2);
     expect(env.context.close).toHaveBeenCalledTimes(1);
-    expect(env.doc.removeEventListener).toHaveBeenCalledTimes(1);
+    expect(env.listeners.get('visibilitychange')?.size).toBe(0);
     sound.unlockFromUserGesture();
     sound.play('deal');
     expect(env.AudioContextMock).toHaveBeenCalledTimes(1);
