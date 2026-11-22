@@ -367,6 +367,65 @@ describe('L2 3D look and lighting polish', () => {
     expect(rugBox.max.z).toBeGreaterThan(TABLE_METRICS.railOuterRz);
     expect(rugBox.min.z).toBeLessThan(-TABLE_METRICS.railOuterRz);
 
+    // Every parlor chair's floor-contact footprint (all 16 tapered legs, full foot ring) must rest on the rug's outer oval
+    let rugOuterMesh: import('three').Mesh | undefined;
+    let maxRugSpan = -1;
+    rug.traverse((obj) => {
+      const mesh = obj as import('three').Mesh;
+      if (!mesh.isMesh) {
+        return;
+      }
+      const b = new THREE.Box3().setFromObject(mesh);
+      const span = b.max.x - b.min.x + (b.max.z - b.min.z);
+      if (span > maxRugSpan) {
+        maxRugSpan = span;
+        rugOuterMesh = mesh;
+      }
+    });
+    expect(rugOuterMesh).toBeDefined();
+
+    const chairLegMeshes: import('three').Mesh[] = [];
+    room.traverse((obj) => {
+      const mesh = obj as import('three').Mesh;
+      if (!mesh.isMesh || !(mesh.geometry instanceof THREE.CylinderGeometry)) {
+        return;
+      }
+      const { radiusTop, radiusBottom, height } = mesh.geometry.parameters;
+      if (
+        Math.abs(radiusTop - 0.024) < 1e-6 &&
+        Math.abs(radiusBottom - 0.018) < 1e-6 &&
+        Math.abs(height - 0.44) < 1e-6
+      ) {
+        chairLegMeshes.push(mesh);
+      }
+    });
+    expect(chairLegMeshes).toHaveLength(16);
+
+    const footRaycaster = new THREE.Raycaster();
+    const downDir = new THREE.Vector3(0, -1, 0);
+    const footRingSamples = 32;
+    const localPoint = new THREE.Vector3();
+    const worldPoint = new THREE.Vector3();
+    for (const leg of chairLegMeshes) {
+      const { radiusBottom, height } = (leg.geometry as import('three').CylinderGeometry).parameters;
+      const footLocalY = -height * 0.5;
+
+      // Center of the foot bottom must sit on the floor and hit the outer rug oval
+      worldPoint.set(0, footLocalY, 0).applyMatrix4(leg.matrixWorld);
+      expect(worldPoint.y).toBeCloseTo(TABLE_METRICS.floorY, 3);
+      footRaycaster.set(new THREE.Vector3(worldPoint.x, TABLE_METRICS.floorY + 0.5, worldPoint.z), downDir);
+      expect(footRaycaster.intersectObject(rugOuterMesh!, false).length).toBeGreaterThan(0);
+
+      // Every point around the foot perimeter at leg radius must also lie on the outer rug oval
+      for (let i = 0; i < footRingSamples; i += 1) {
+        const theta = (i / footRingSamples) * Math.PI * 2;
+        localPoint.set(Math.cos(theta) * radiusBottom, footLocalY, Math.sin(theta) * radiusBottom);
+        worldPoint.copy(localPoint).applyMatrix4(leg.matrixWorld);
+        footRaycaster.set(new THREE.Vector3(worldPoint.x, TABLE_METRICS.floorY + 0.5, worldPoint.z), downDir);
+        expect(footRaycaster.intersectObject(rugOuterMesh!, false).length).toBeGreaterThan(0);
+      }
+    }
+
     // Above-floor props must remain behind or outside the table & rival chairs so they never enter table sightlines
     for (const propName of ['PropTeaCabinet', 'PropPottedPlant', 'PropWallClock', 'PropSideStool']) {
       const prop = room.getObjectByName(propName)!;

@@ -450,7 +450,7 @@ export function buildRoomAndTable(): THREE.Group {
   const cabinetWoodMat = createMatteMaterial(SCENE_COLORS.propCabinetWood, { roughness: 0.8 });
   const cabinetDarkMat = createMatteMaterial(SCENE_COLORS.propCabinetDark, { roughness: 0.84 });
 
-  const rugOuterShape = createOvalShape(2.71, 1.75, 64);
+  const rugOuterShape = createOvalShape(2.92, 2.13, 64);
   const rugOuter = new THREE.Mesh(
     new THREE.ShapeGeometry(rugOuterShape),
     cabinetDarkMat,
@@ -460,7 +460,7 @@ export function buildRoomAndTable(): THREE.Group {
   rugOuter.receiveShadow = true;
   rugGroup.add(rugOuter);
 
-  const rugBandShape = createOvalShape(2.63, 1.69, 64);
+  const rugBandShape = createOvalShape(2.83, 2.027, 64);
   const rugBand = new THREE.Mesh(
     new THREE.ShapeGeometry(rugBandShape),
     createMatteMaterial(SCENE_COLORS.propRugBand, { roughness: 0.95 }),
@@ -470,8 +470,8 @@ export function buildRoomAndTable(): THREE.Group {
   rugBand.receiveShadow = true;
   rugGroup.add(rugBand);
 
-  const rugGoldShape = createOvalShape(2.42, 1.51, 64);
-  rugGoldShape.holes.push(createOvalPath(2.34, 1.45, 64));
+  const rugGoldShape = createOvalShape(2.45, 1.6, 64);
+  rugGoldShape.holes.push(createOvalPath(2.36, 1.5, 64));
   const rugGold = new THREE.Mesh(
     new THREE.ShapeGeometry(rugGoldShape),
     createMatteMaterial(SCENE_COLORS.propRugGold, { roughness: 0.94 }),
@@ -480,7 +480,7 @@ export function buildRoomAndTable(): THREE.Group {
   rugGold.position.y = floorY + 0.009;
   rugGroup.add(rugGold);
 
-  const rugFieldShape = createOvalShape(2.34, 1.45, 64);
+  const rugFieldShape = createOvalShape(2.36, 1.5, 64);
   const rugField = new THREE.Mesh(
     new THREE.ShapeGeometry(rugFieldShape),
     createMatteMaterial(SCENE_COLORS.propRugField, { roughness: 0.96 }),
