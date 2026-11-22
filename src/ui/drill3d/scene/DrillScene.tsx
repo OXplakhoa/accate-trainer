@@ -57,44 +57,47 @@ export function DrillScene({ phase, highlight, spot, reducedMotion }: DrillScene
     }
 
     let cancelled = false;
-    let controller: DrillSceneController | null = null;
+
+    const disposeActiveController = () => {
+      const active = controllerRef.current;
+      controllerRef.current = null;
+      active?.dispose();
+    };
 
     void import('./sceneController')
-      .then(({ DrillSceneController: Controller }) => {
-        if (cancelled) {
-          return;
-        }
-        try {
-          controller = new Controller(container, latestPropsRef.current, () => {
-            if (!cancelled) {
-              setWebglFailed(true);
-            }
-          });
-          controllerRef.current = controller;
-        } catch {
-          if (!cancelled) {
+      .then(({ createManagedSceneController }) => {
+        createManagedSceneController({
+          container,
+          controllerRef,
+          initialState: latestPropsRef.current,
+          isCancelled: () => cancelled,
+          onWebglFailed: () => {
             setWebglFailed(true);
-          }
-        }
+          },
+        });
       })
       .catch(() => {
         if (!cancelled) {
+          disposeActiveController();
           setWebglFailed(true);
         }
       });
 
     return () => {
       cancelled = true;
-      if (controller) {
-        controller.dispose();
-      }
-      controllerRef.current = null;
+      disposeActiveController();
     };
   }, []);
 
   // Push reactive updates (phase camera cut/transition, spot chips/cards, active rival pose, highlight rings)
   useEffect(() => {
-    if (controllerRef.current && !webglFailed) {
+    if (webglFailed) {
+      const active = controllerRef.current;
+      controllerRef.current = null;
+      active?.dispose();
+      return;
+    }
+    if (controllerRef.current) {
       controllerRef.current.update({ phase, highlight, spot, reducedMotion });
     }
   }, [phase, highlight, spot, reducedMotion, webglFailed]);

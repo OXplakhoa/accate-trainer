@@ -213,7 +213,14 @@ export class DrillSceneController {
 
   private handleContextLost = (event: Event): void => {
     event.preventDefault();
+    if (this.disposed) {
+      return;
+    }
     this.cancelTransition();
+    if (this.resizeRafId !== null) {
+      cancelAnimationFrame(this.resizeRafId);
+      this.resizeRafId = null;
+    }
     this.onContextLostCallback();
   };
 
@@ -411,8 +418,72 @@ export class DrillSceneController {
     disposeObject3DResources(this.scene);
     this.renderer.dispose();
 
-    if (canvas.parentElement === this.container) {
+    if (canvas.parentNode === this.container) {
       this.container.removeChild(canvas);
+    }
+  }
+}
+
+export interface ManagedSceneController {
+  update(state: SceneControllerState): void;
+  dispose(): void;
+}
+
+export function disposeManagedController(
+  controllerRef: { current: ManagedSceneController | null },
+): boolean {
+  const active = controllerRef.current;
+  if (!active) {
+    return false;
+  }
+  controllerRef.current = null;
+  active.dispose();
+  return true;
+}
+
+export function createManagedSceneController(options: {
+  container: HTMLElement;
+  controllerRef: { current: ManagedSceneController | null };
+  initialState: SceneControllerState;
+  isCancelled: () => boolean;
+  onWebglFailed: () => void;
+  createController?: (
+    container: HTMLElement,
+    initialState: SceneControllerState,
+    onContextLost: () => void,
+  ) => ManagedSceneController;
+}): void {
+  if (options.isCancelled()) {
+    return;
+  }
+
+  let failedDuringInit = false;
+  const factory =
+    options.createController ??
+    ((el, state, onContextLost) => new DrillSceneController(el, state, onContextLost));
+
+  try {
+    const created = factory(options.container, options.initialState, () => {
+      failedDuringInit = true;
+      if (!options.isCancelled()) {
+        disposeManagedController(options.controllerRef);
+        options.onWebglFailed();
+      }
+    });
+
+    if (options.isCancelled() || failedDuringInit) {
+      if (options.controllerRef.current === created) {
+        options.controllerRef.current = null;
+      }
+      created.dispose();
+      return;
+    }
+
+    options.controllerRef.current = created;
+  } catch {
+    if (!options.isCancelled()) {
+      disposeManagedController(options.controllerRef);
+      options.onWebglFailed();
     }
   }
 }
