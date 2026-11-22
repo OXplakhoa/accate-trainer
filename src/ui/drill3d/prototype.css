@@ -1,0 +1,139 @@
+:root {
+  font-family: 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  color: #382b24;
+  background: #f3e8d4;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+}
+
+.accate-drill-3d {
+  --drill-ink: #382b24;
+  --drill-canvas: #f3e8d4;
+  --drill-paper: #fff8e9;
+  --drill-accent: #265f56;
+  --drill-line: #d5c0a5;
+  min-block-size: 100vh;
+  font-variant-numeric: tabular-nums;
+}
+
+.ad3-masthead {
+  box-sizing: border-box;
+  max-inline-size: 1580px;
+  margin-inline: auto;
+  padding: 22px clamp(12px, 3vw, 36px) 16px;
+}
+
+.ad3-masthead h1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  margin: 0;
+  font-size: clamp(1.2rem, 2.4vw, 1.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+.ad3-masthead h1 span {
+  color: var(--drill-accent);
+  font-size: 1.15em;
+  font-weight: 800;
+}
+
+.ad3-workspace {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  align-items: start;
+  gap: clamp(12px, 2vw, 26px);
+  max-inline-size: 1580px;
+  margin-inline: auto;
+  padding: 0 clamp(12px, 3vw, 36px) 30px;
+}
+
+.ad3-table,
+.ad3-lesson {
+  min-inline-size: 0;
+}
+
+.accate-drill-3d :focus-visible {
+  outline: 3px solid #235b96;
+  outline-offset: 3px;
+}
+
+@media (max-width: 920px) {
+  .ad3-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ad3-masthead {
+    padding-block: 14px 12px;
+  }
+}
+
+.ad3-welcome {
+  border-block-start: 3px solid var(--drill-accent);
+  padding: clamp(14px, 3vw, 26px);
+  background: var(--drill-paper);
+}
+
+.ad3-welcome h2 {
+  margin: 0;
+  font-size: clamp(1.3rem, 2.5vw, 1.8rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+}
+
+.ad3-welcome p {
+  line-height: 1.5;
+}
+
+.ad3-welcome button {
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 700;
+  background: var(--drill-accent);
+  color: #fff8e9;
+  cursor: pointer;
+}
+
+.ad3-masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.ad3-sound {
+  flex-shrink: 0;
+  border: 1px solid var(--drill-line);
+  border-radius: 999px;
+  background: var(--drill-paper);
+  padding: 8px 12px;
+  color: var(--drill-ink);
+  font: inherit;
+  font-size: 0.83rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ad3-welcome button,
+  .ad3-sound {
+    transition: transform 140ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .ad3-welcome button:active,
+  .ad3-sound:active {
+    transform: scale(0.96);
+  }
+}
+
+.accate-drill-3d .ad3-lesson:focus-visible {
+  outline: none;
+}

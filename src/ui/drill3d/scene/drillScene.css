@@ -1,0 +1,650 @@
+.drill3d-scene {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 330px;
+  height: 100%;
+  aspect-ratio: 4 / 3;
+  max-height: 680px;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(83, 60, 49, 0.22);
+  background: #f3e8d4;
+  color: #2b211c;
+  box-sizing: border-box;
+  font-family:
+    'Inter',
+    'SF Pro Text',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  box-shadow: 0 10px 28px rgba(83, 60, 49, 0.12);
+}
+
+.drill3d-scene *,
+.drill3d-scene *::before,
+.drill3d-scene *::after {
+  box-sizing: border-box;
+}
+
+.drill3d-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #f3e8d4;
+}
+
+.drill3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.drill3d-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #f3e8d4;
+}
+
+.drill3d-fallback-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.drill3d-fallback-note {
+  position: absolute;
+  left: 10px;
+  top: 48px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(248, 241, 228, 0.88);
+  border: 1px solid rgba(83, 60, 49, 0.22);
+  color: #533c31;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
+/* Visually integrated warm matte HUD overlay */
+.drill3d-hud {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 12px;
+  pointer-events: none;
+}
+
+.drill3d-hud-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.drill3d-status-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  pointer-events: auto;
+}
+
+.drill3d-phase-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(249, 243, 232, 0.9);
+  border: 1px solid rgba(83, 60, 49, 0.22);
+  color: #4a352a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  backdrop-filter: blur(6px);
+}
+
+.drill3d-phase-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34786d;
+  flex-shrink: 0;
+}
+
+.drill3d-phase-badge[data-phase='decision'] .drill3d-phase-dot {
+  background: #c95849;
+}
+
+.drill3d-phase-badge[data-phase='review'] .drill3d-phase-dot {
+  background: #e18a46;
+}
+
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='idle'] .drill3d-phase-dot {
+  background: #8a7565;
+}
+
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='preflop'] .drill3d-phase-dot {
+  background: #34786d;
+}
+
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='flop'] .drill3d-phase-dot,
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='turn'] .drill3d-phase-dot {
+  background: #e18a46;
+}
+
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='river'] .drill3d-phase-dot {
+  background: #c95849;
+}
+
+.drill3d-active-turn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(255, 248, 230, 0.94);
+  border: 1.5px solid #d79928;
+  color: #3e2a16;
+  font-size: 0.74rem;
+  line-height: 1.2;
+  box-shadow: 0 2px 8px rgba(83, 60, 49, 0.12);
+  backdrop-filter: blur(6px);
+}
+
+.drill3d-active-turn[data-active-rival='hero'] {
+  border-color: #34786d;
+  background: rgba(235, 248, 244, 0.95);
+  color: #1f4c45;
+}
+
+.drill3d-active-turn-label {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.drill3d-active-turn-name {
+  font-weight: 800;
+}
+
+.drill3d-rivals-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(249, 243, 232, 0.84);
+  border: 1px solid rgba(83, 60, 49, 0.16);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #4f3a2e;
+  backdrop-filter: blur(6px);
+}
+
+.drill3d-rival-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.drill3d-rival-tag[data-active='true'] {
+  background: #fff2cc;
+  border-color: #d79928;
+  color: #2b1d12;
+  font-weight: 800;
+}
+
+.drill3d-rival-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.drill3d-rival-swatch--ca {
+  background: #4f9dd3;
+}
+
+.drill3d-rival-swatch--cao {
+  background: #e18a46;
+}
+
+.drill3d-rival-swatch--nong {
+  background: #c95849;
+}
+
+/* Pot & Call numeric telemetry (tabular numerals, high contrast, highlight-synced) */
+.drill3d-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(249, 243, 232, 0.92);
+  border: 1.5px solid rgba(83, 60, 49, 0.22);
+  box-shadow: 0 4px 12px rgba(83, 60, 49, 0.1);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease;
+}
+
+.drill3d-metrics[data-highlight='total'] {
+  border-color: #d79928;
+  background: rgba(255, 249, 232, 0.97);
+  box-shadow:
+    0 0 0 2.5px rgba(240, 190, 82, 0.45),
+    0 6px 16px rgba(83, 60, 49, 0.16);
+}
+
+.drill3d-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1.5px solid transparent;
+  background: rgba(243, 232, 212, 0.52);
+  color: #3a2a22;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.drill3d-metric-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b5245;
+}
+
+.drill3d-metric-value {
+  font-size: 1rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: #241914;
+}
+
+.drill3d-metric--pot[data-active='true'] {
+  border-color: #d79928;
+  background: #fff2cc;
+  box-shadow: 0 0 0 2px rgba(240, 190, 82, 0.35);
+}
+
+.drill3d-metric--call[data-active='true'] {
+  border-color: #c95849;
+  background: #fde7e1;
+  box-shadow: 0 0 0 2px rgba(201, 88, 73, 0.3);
+}
+
+.drill3d-metric--total {
+  border-color: #c98b1e;
+  background: #fae2a3;
+}
+
+.drill3d-metric--total .drill3d-metric-label {
+  color: #603c0a;
+}
+
+.drill3d-metric--total .drill3d-metric-value {
+  color: #3b2304;
+}
+
+/* Bottom integrated card dock */
+.drill3d-hud-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Unseen heart outs tray — strictly shown ONLY when highlight === 'outs' */
+.drill3d-outs-tray {
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: rgba(255, 246, 245, 0.95);
+  border: 1.5px dashed #cf4a57;
+  box-shadow: 0 4px 14px rgba(176, 52, 66, 0.16);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.drill3d-outs-title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #9e2934;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+.drill3d-outs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.drill3d-out-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px dashed rgba(199, 59, 58, 0.65);
+  color: #b72e34;
+  font-size: 0.74rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+/* Cards dock: Board (Turn) + Hero cards */
+.drill3d-cards-dock {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.drill3d-card-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: rgba(249, 243, 232, 0.9);
+  border: 1px solid rgba(83, 60, 49, 0.22);
+  box-shadow: 0 4px 12px rgba(83, 60, 49, 0.12);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+  min-width: 0;
+}
+
+.drill3d-card-group--hero {
+  border-color: rgba(52, 120, 109, 0.45);
+  background: rgba(251, 247, 239, 0.94);
+}
+
+.drill3d-group-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5e473b;
+  line-height: 1.1;
+}
+
+.drill3d-draw-note {
+  color: #b72e34;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.drill3d-card-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.drill3d-card {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 46px;
+  border-radius: 6px;
+  background: #fbf7ef;
+  border: 1.5px solid #cbbba2;
+  box-shadow: 0 2px 4px rgba(83, 60, 49, 0.14);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #22272c;
+  flex-shrink: 0;
+}
+
+.drill3d-card--red {
+  color: #c73b3a;
+}
+
+.drill3d-card--hero {
+  width: 38px;
+  height: 50px;
+  border-color: #a99377;
+}
+
+.drill3d-card--heart-active {
+  border-color: #cf4a57;
+  background: #fff6f5;
+  box-shadow:
+    0 0 0 2px rgba(226, 92, 103, 0.3),
+    0 3px 6px rgba(176, 52, 66, 0.16);
+}
+
+.drill3d-card-rank {
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+.drill3d-card--hero .drill3d-card-rank {
+  font-size: 1rem;
+}
+
+.drill3d-card-suit {
+  font-size: 0.85rem;
+  margin-top: 2px;
+}
+
+.drill3d-card--river-slot {
+  background: rgba(52, 120, 109, 0.1);
+  border: 1.5px dashed rgba(52, 120, 109, 0.55);
+  color: #2f695f;
+  box-shadow: none;
+}
+
+.drill3d-card--river-slot[data-outs='true'] {
+  background: rgba(226, 92, 103, 0.14);
+  border-color: #cf4a57;
+  color: #b72e34;
+}
+
+.drill3d-river-q {
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.drill3d-river-sub {
+  font-size: 0.52rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+}
+
+/* Reduced motion disables secondary CSS transitions */
+.drill3d-scene[data-reduced-motion='true'] .drill3d-metrics,
+.drill3d-scene[data-reduced-motion='true'] .drill3d-metric {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drill3d-scene .drill3d-metrics,
+  .drill3d-scene .drill3d-metric {
+    transition: none;
+  }
+}
+
+/* Compact mobile optimization: crisp scanning at 390px and 320px with zero horizontal overflow */
+@media (max-width: 480px) {
+  .drill3d-scene {
+    min-height: 310px;
+    aspect-ratio: 6 / 5;
+    border-radius: 12px;
+  }
+
+  .drill3d-hud {
+    padding: 8px;
+  }
+
+  .drill3d-rivals-legend {
+    display: none;
+  }
+
+  .drill3d-phase-badge {
+    padding: 4px 8px;
+    font-size: 0.7rem;
+  }
+
+  .drill3d-metrics {
+    padding: 3px;
+    gap: 4px;
+  }
+
+  .drill3d-metric {
+    padding: 3px 7px;
+    gap: 4px;
+  }
+
+  .drill3d-metric-label {
+    font-size: 0.66rem;
+  }
+
+  .drill3d-metric-value {
+    font-size: 0.9rem;
+  }
+
+  .drill3d-cards-dock {
+    gap: 6px;
+  }
+
+  .drill3d-card-group {
+    padding: 5px 6px;
+  }
+
+  .drill3d-group-label {
+    font-size: 0.62rem;
+  }
+
+  .drill3d-card {
+    width: 28px;
+    height: 38px;
+    border-radius: 5px;
+  }
+
+  .drill3d-card--hero {
+    width: 31px;
+    height: 41px;
+  }
+
+  .drill3d-card-rank {
+    font-size: 0.8rem;
+  }
+
+  .drill3d-card--hero .drill3d-card-rank {
+    font-size: 0.86rem;
+  }
+
+  .drill3d-card-suit {
+    font-size: 0.72rem;
+    margin-top: 1px;
+  }
+
+  .drill3d-outs-tray {
+    padding: 5px 7px;
+    gap: 4px;
+  }
+
+  .drill3d-outs-title {
+    font-size: 0.66rem;
+  }
+
+  .drill3d-out-chip {
+    padding: 1px 5px;
+    font-size: 0.68rem;
+  }
+}
+
+/* Ultra-narrow 320px viewport refinement */
+@media (max-width: 350px) {
+  .drill3d-scene {
+    min-height: 296px;
+    aspect-ratio: 1 / 1;
+  }
+
+  .drill3d-hud {
+    padding: 6px;
+  }
+
+  .drill3d-card-row {
+    gap: 3px;
+  }
+
+  .drill3d-card {
+    width: 25px;
+    height: 35px;
+  }
+
+  .drill3d-card--hero {
+    width: 27px;
+    height: 37px;
+  }
+
+  .drill3d-card-rank {
+    font-size: 0.74rem;
+  }
+
+  .drill3d-card--hero .drill3d-card-rank {
+    font-size: 0.78rem;
+  }
+
+  .drill3d-card-suit {
+    font-size: 0.66rem;
+  }
+
+  .drill3d-river-sub {
+    display: none;
+  }
+}

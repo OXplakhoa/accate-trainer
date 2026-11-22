@@ -194,6 +194,19 @@ export interface SandboxExternalApi {
   readonly playTimerTick?: (urgent?: boolean) => void;
 }
 
+/** Public table information and Hero's own cards, safe for alternative table views. */
+export interface SandboxTableView {
+  readonly pot: number;
+  readonly call: number;
+  readonly heroCards: readonly string[];
+  readonly board: readonly string[];
+  readonly street: Street | null;
+  readonly occupiedRivals: readonly RivalId[];
+  readonly activeRival: RivalId | null;
+  readonly activePlayerName: string | null;
+  readonly reducedMotion: boolean;
+}
+
 export interface SandboxAppProps {
   /** Optional deterministic seed for tests or Tournament wrapper. */
   readonly initialSeed?: string;
@@ -219,4 +232,8 @@ export interface SandboxAppProps {
   readonly disableMidHandFeedback?: boolean;
   /** Optional storage override for testing persistence/fallback. */
   readonly storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** Replaces only the visual board and pot; all table controls remain in Sandbox. */
+  readonly renderTableView?: (view: SandboxTableView) => ReactNode;
+  /** Hide table configuration when a wrapper requires a fixed roster. */
+  readonly hideTableSettings?: boolean;
 }

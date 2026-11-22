@@ -1,0 +1,327 @@
+.drill-lesson {
+  --dl-ink: #263d37;
+  --dl-green: #286b5d;
+  --dl-line: #d9ded4;
+  color: var(--dl-ink);
+  background: #f8f7f1;
+  border: 1px solid #e3e4d9;
+  border-radius: 20px;
+  padding: clamp(16px, 3vw, 26px);
+  font-family: system-ui, sans-serif;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.drill-lesson * {
+  box-sizing: border-box;
+}
+.drill-lesson button,
+.drill-lesson summary {
+  font: inherit;
+  cursor: pointer;
+}
+.drill-lesson button:focus-visible,
+.drill-lesson summary:focus-visible {
+  outline: 3px solid #c8773b;
+  outline-offset: 2px;
+}
+.drill-lesson button {
+  min-height: 44px;
+}
+.dl-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.dl-header h2 {
+  font-size: clamp(1.35rem, 3vw, 1.75rem);
+  line-height: 1.16;
+  letter-spacing: -0.035em;
+  margin: 7px 0;
+}
+.dl-header p,
+.dl-subtitle {
+  color: #66766d;
+  font-size: 0.88rem;
+  margin: 0;
+  line-height: 1.5;
+}
+.dl-eyebrow,
+.dl-label {
+  color: #52766a;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
+.dl-selectors {
+  display: grid;
+  gap: 14px;
+  margin: 22px 0 16px;
+}
+.dl-label {
+  display: block;
+  margin-bottom: 7px;
+}
+.dl-segment {
+  display: flex;
+  gap: 5px;
+  padding: 4px;
+  border-radius: 12px;
+  background: #e9ede5;
+}
+.dl-segment button {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #50645b;
+  border-radius: 9px;
+  padding: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.dl-segment button[aria-pressed='true'] {
+  background: white;
+  border-color: #dce5da;
+  color: #20594b;
+  box-shadow: 0 1px 3px #243d3215;
+}
+.dl-segment button span {
+  display: block;
+  font-size: 0.69rem;
+  font-weight: 400;
+}
+.dl-assumption {
+  border-left: 3px solid #d3a363;
+  padding: 4px 0 4px 11px;
+  color: #665d4e;
+  font-size: 0.77rem;
+  line-height: 1.5;
+}
+.dl-card {
+  background: #fff;
+  border: 1px solid #e2e8df;
+  border-radius: 15px;
+  margin-top: 18px;
+  padding: 19px;
+  box-shadow: 0 5px 18px #34584909;
+}
+.dl-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.dl-count {
+  color: #718178;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.dl-progress {
+  height: 4px;
+  border-radius: 5px;
+  background: #e7eee8;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.dl-progress span {
+  display: block;
+  height: 100%;
+  background: #5e9b7d;
+}
+.dl-card h3 {
+  font-size: 1.19rem;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  margin: 20px 0 6px;
+}
+.dl-options,
+.dl-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.dl-options button,
+.dl-actions button {
+  flex: 1 1 70px;
+  border: 1px solid #cfded3;
+  background: #f7faf6;
+  color: #28584a;
+  border-radius: 10px;
+  font-weight: 700;
+  padding: 10px;
+}
+.dl-options button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.dl-feedback {
+  border-radius: 10px;
+  padding: 12px;
+  margin-top: 14px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  background: #fbf1e7;
+  color: #76512d;
+}
+.dl-feedback.correct {
+  background: #eaf5ed;
+  color: #245f45;
+}
+.dl-feedback p {
+  margin: 4px 0 0;
+}
+.drill-lesson .dl-primary {
+  border: 0;
+  border-radius: 10px;
+  background: var(--dl-green);
+  color: white;
+  font-weight: 750;
+  padding: 11px 15px;
+}
+.dl-card > .dl-primary {
+  width: 100%;
+  margin-top: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.dl-timer {
+  border-radius: 10px;
+  padding: 7px 10px;
+  background: #f9eee1;
+  color: #98572c;
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+.dl-timer small {
+  font-size: 0.68rem;
+}
+.dl-result > p {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: #596d62;
+}
+.dl-explanation {
+  margin-top: 18px;
+}
+.dl-hint {
+  color: #718178;
+  font-size: 0.75rem;
+}
+.dl-explanation > button {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  text-align: left;
+  align-items: flex-start;
+  border: 0;
+  border-bottom: 1px solid #e9eee8;
+  color: #334e42;
+  background: transparent;
+  padding: 11px 3px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.dl-explanation > button b {
+  color: #79a28b;
+  font-size: 0.7rem;
+  padding-top: 2px;
+}
+.dl-explanation details {
+  margin-top: 14px;
+  font-size: 0.83rem;
+  line-height: 1.55;
+}
+.dl-explanation summary {
+  color: #276954;
+  font-weight: 700;
+  padding: 10px 0;
+}
+.dl-deep {
+  color: #53665c;
+}
+.dl-reset {
+  border: 0;
+  background: transparent;
+  color: #4c7161;
+  font-size: 0.8rem !important;
+  padding: 8px 0 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (hover: hover) {
+  .dl-options button:not(:disabled):hover,
+  .dl-actions button:not(.dl-primary):hover,
+  .dl-explanation > button:hover {
+    background: #edf6ee;
+  }
+  .drill-lesson .dl-primary:hover {
+    background: #1c5548;
+  }
+}
+
+@media (max-width: 540px) {
+  .drill-lesson {
+    padding: 12px;
+  }
+
+  .dl-header h2 {
+    margin: 2px 0 0;
+    font-size: 1.18rem;
+  }
+
+  .dl-selectors {
+    gap: 7px;
+    margin: 10px 0 8px;
+  }
+
+  .dl-label {
+    margin-bottom: 3px;
+  }
+
+  .dl-assumption {
+    line-height: 1.35;
+  }
+
+  .dl-card {
+    margin-top: 9px;
+    padding: 10px;
+  }
+
+  .dl-card h3 {
+    margin-top: 9px;
+  }
+
+  .dl-options,
+  .dl-actions {
+    margin-top: 9px;
+  }
+
+  .dl-options button {
+    flex-basis: 0;
+    min-width: 0;
+    padding-inline: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dl-options button,
+  .dl-actions button,
+  .drill-lesson .dl-primary {
+    transition: transform 120ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .dl-options button:active,
+  .dl-actions button:active,
+  .drill-lesson .dl-primary:active {
+    transform: translateY(1px) scale(0.98);
+  }
+}
+
+@media (max-width: 360px) {
+  .dl-header {
+    display: none;
+  }
+}
