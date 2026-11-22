@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import type { DemoSpot, LessonHighlight, ScenePhase } from '../contract';
+import type { LessonHighlight, ScenePhase, SceneTableSnapshot } from '../contract';
 import {
   buildCharacters,
+  getLiveCharacterPose,
   lerpCharacterPose,
   PHASE_CHARACTER_POSES,
   type CharacterPoseState,
@@ -10,6 +11,7 @@ import {
 import { buildRoomAndTable } from './buildRoomAndTable';
 import { buildTabletop, type TabletopRig } from './buildTabletop';
 import { disposeObject3DResources, SCENE_COLORS } from './palette';
+import { getEffectiveHighlight, getOccupiedRivals } from './snapshot';
 
 export interface CameraPreset {
   readonly position: readonly [number, number, number];
@@ -48,11 +50,12 @@ export const CAMERA_PRESETS: Record<ScenePhase, CameraPreset> = {
 export interface SceneControllerState {
   readonly phase: ScenePhase;
   readonly highlight: LessonHighlight;
-  readonly spot: DemoSpot;
+  readonly spot: SceneTableSnapshot;
   readonly reducedMotion: boolean;
 }
 
 const TRANSITION_DURATION_MS = 360;
+const POSE_SETTLE_DURATION_MS = 260;
 
 function easeOutCubic(t: number): number {
   const inv = 1 - t;
@@ -67,6 +70,24 @@ function computeAdaptiveFov(baseFov: number, minHFov: number, aspect: number): n
   const vRadForMinH = 2 * Math.atan(Math.tan(minHRad / 2) / aspect);
   const vDeg = THREE.MathUtils.radToDeg(vRadForMinH);
   return Math.min(60, Math.max(baseFov, vDeg));
+}
+
+function resolveTargetPose(state: SceneControllerState): CharacterPoseState {
+  if (state.spot.live) {
+    return getLiveCharacterPose(
+      state.spot.live.activeRival,
+      state.spot.live.activePlayerName !== null,
+    );
+  }
+  return PHASE_CHARACTER_POSES[state.phase];
+}
+
+function resolvePoseKey(state: SceneControllerState): string {
+  if (state.spot.live) {
+    const heroFlag = state.spot.live.activePlayerName !== null ? 'turn' : 'idle';
+    return `live:${state.spot.live.activeRival ?? 'none'}:${heroFlag}`;
+  }
+  return `drill:${state.phase}`;
 }
 
 export class DrillSceneController {
@@ -86,6 +107,8 @@ export class DrillSceneController {
   private currentBaseFov = 38;
   private currentMinHFov = 54;
   private currentPose: CharacterPoseState;
+  private targetPose: CharacterPoseState;
+  private currentPoseKey: string;
 
   private activeRafId: number | null = null;
   private resizeRafId: number | null = null;
@@ -100,7 +123,9 @@ export class DrillSceneController {
     this.container = container;
     this.onContextLostCallback = onContextLost;
     this.currentPhase = initialState.phase;
-    this.currentPose = PHASE_CHARACTER_POSES[initialState.phase];
+    this.currentPose = resolveTargetPose(initialState);
+    this.targetPose = this.currentPose;
+    this.currentPoseKey = resolvePoseKey(initialState);
 
     // Renderer setup — throws cleanly if WebGL is disabled so caller can switch to 2D fallback
     this.renderer = new THREE.WebGLRenderer({
@@ -134,14 +159,15 @@ export class DrillSceneController {
     this.scene.add(roomAndTable);
 
     this.characters = buildCharacters();
+    this.characters.setOccupiedRivals(getOccupiedRivals(initialState.spot));
     this.scene.add(this.characters.root);
 
     this.tabletop = buildTabletop(initialState.spot);
     this.scene.add(this.tabletop.root);
-    this.tabletop.updateHighlight(initialState.highlight);
+    this.tabletop.updateHighlight(getEffectiveHighlight(initialState.spot, initialState.highlight));
 
-    // Snap immediately to initial phase
-    this.snapToPhase(initialState.phase);
+    // Snap immediately to initial phase & pose
+    this.snapToState(initialState.phase, this.targetPose, this.currentPoseKey);
 
     // Measure & render initial frame
     this.measureAndResize();
@@ -228,7 +254,7 @@ export class DrillSceneController {
     this.renderer.render(this.scene, this.camera);
   }
 
-  private snapToPhase(phase: ScenePhase): void {
+  private snapToState(phase: ScenePhase, pose: CharacterPoseState, poseKey: string): void {
     this.cancelTransition();
     const preset = CAMERA_PRESETS[phase];
     this.currentPhase = phase;
@@ -236,13 +262,15 @@ export class DrillSceneController {
     this.currentTarget.set(preset.target[0], preset.target[1], preset.target[2]);
     this.currentBaseFov = preset.baseFov;
     this.currentMinHFov = preset.minHFov;
-    this.currentPose = PHASE_CHARACTER_POSES[phase];
+    this.currentPose = pose;
+    this.targetPose = pose;
+    this.currentPoseKey = poseKey;
     this.characters.applyPose(this.currentPose);
     this.applyCameraState();
     this.renderOnce();
   }
 
-  private animateToPhase(phase: ScenePhase): void {
+  private animateToPhase(phase: ScenePhase, endPose: CharacterPoseState, poseKey: string): void {
     this.cancelTransition();
 
     const startPos = this.currentPos.clone();
@@ -254,8 +282,9 @@ export class DrillSceneController {
     const preset = CAMERA_PRESETS[phase];
     const endPos = new THREE.Vector3(preset.position[0], preset.position[1], preset.position[2]);
     const endTarget = new THREE.Vector3(preset.target[0], preset.target[1], preset.target[2]);
-    const endPose = PHASE_CHARACTER_POSES[phase];
     this.currentPhase = phase;
+    this.targetPose = endPose;
+    this.currentPoseKey = poseKey;
 
     const startTime = performance.now();
 
@@ -288,6 +317,41 @@ export class DrillSceneController {
     this.activeRafId = requestAnimationFrame(tick);
   }
 
+  /**
+   * Finite pose-only settle when active turn changes while keeping camera locked/decision-stable.
+   */
+  private animatePoseOnly(endPose: CharacterPoseState, poseKey: string): void {
+    this.cancelTransition();
+
+    const startPose = this.currentPose;
+    this.targetPose = endPose;
+    this.currentPoseKey = poseKey;
+
+    const startTime = performance.now();
+
+    const tick = (now: number) => {
+      if (this.disposed) {
+        this.activeRafId = null;
+        return;
+      }
+      const rawT = Math.min(1, Math.max(0, (now - startTime) / POSE_SETTLE_DURATION_MS));
+      const eased = easeOutCubic(rawT);
+
+      this.currentPose = lerpCharacterPose(startPose, endPose, eased);
+      this.characters.applyPose(this.currentPose);
+      this.renderOnce();
+
+      if (rawT < 1) {
+        this.activeRafId = requestAnimationFrame(tick);
+      } else {
+        // Strictly stop rendering once the finite pose settle finishes
+        this.activeRafId = null;
+      }
+    };
+
+    this.activeRafId = requestAnimationFrame(tick);
+  }
+
   public measureAndResize(): void {
     if (this.disposed) {
       return;
@@ -312,20 +376,47 @@ export class DrillSceneController {
     }
 
     this.tabletop.updateSpot(state.spot);
-    this.tabletop.updateHighlight(state.highlight);
+    this.tabletop.updateHighlight(getEffectiveHighlight(state.spot, state.highlight));
+    this.characters.setOccupiedRivals(getOccupiedRivals(state.spot));
+
+    const nextPoseKey = resolvePoseKey(state);
+    const nextPose = resolveTargetPose(state);
 
     if (state.phase !== this.currentPhase) {
       // Instantaneous cut when entering decision OR when reducedMotion is enabled
       if (state.phase === 'decision' || state.reducedMotion) {
-        this.snapToPhase(state.phase);
+        this.snapToState(state.phase, nextPose, nextPoseKey);
       } else {
-        this.animateToPhase(state.phase);
+        this.animateToPhase(state.phase, nextPose, nextPoseKey);
       }
       return;
     }
 
-    // No camera change: re-render a single frame for spot/highlight change
-    this.renderOnce();
+    if (nextPoseKey !== this.currentPoseKey) {
+      // Keep camera locked on decision while characters settle smoothly (or snap on reducedMotion)
+      if (state.reducedMotion) {
+        this.cancelTransition();
+        this.currentPose = nextPose;
+        this.targetPose = nextPose;
+        this.currentPoseKey = nextPoseKey;
+        this.characters.applyPose(this.currentPose);
+        this.renderOnce();
+      } else {
+        this.animatePoseOnly(nextPose, nextPoseKey);
+      }
+      return;
+    }
+
+    // If reducedMotion turned on mid-transition, snap cleanly to target
+    if (state.reducedMotion && this.activeRafId !== null) {
+      this.snapToState(this.currentPhase, this.targetPose, this.currentPoseKey);
+      return;
+    }
+
+    // No camera/pose transition running: re-render a single frame for spot/highlight/occupancy change
+    if (this.activeRafId === null) {
+      this.renderOnce();
+    }
   }
 
   public dispose(): void {

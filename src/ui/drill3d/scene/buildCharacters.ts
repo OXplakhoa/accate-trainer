@@ -1,16 +1,19 @@
 import * as THREE from 'three';
-import type { ScenePhase } from '../contract';
+import type { ScenePhase, SceneRival } from '../contract';
 import { createMatteMaterial, SCENE_COLORS } from './palette';
 
 export interface CharacterPoseState {
   readonly caHeadRotY: number;
   readonly caHeadRotX: number;
+  readonly caLean: number;
   readonly caLidOffset: number;
   readonly caoHeadRotY: number;
   readonly caoHeadRotX: number;
+  readonly caoLean: number;
   readonly caoBrowLift: number;
   readonly nongHeadRotY: number;
   readonly nongHeadRotX: number;
+  readonly nongLean: number;
   readonly nongLidTilt: number;
   readonly nongSteamScale: number;
   readonly nongBrowTilt: number;
@@ -19,18 +22,22 @@ export interface CharacterPoseState {
 export interface CharactersRig {
   readonly root: THREE.Group;
   readonly applyPose: (pose: CharacterPoseState) => void;
+  readonly setOccupiedRivals: (occupiedRivals: readonly SceneRival[]) => void;
 }
 
 export const PHASE_CHARACTER_POSES: Record<ScenePhase, CharacterPoseState> = {
   arrival: {
     caHeadRotY: 0.06,
     caHeadRotX: -0.02,
+    caLean: 0,
     caLidOffset: 0.0,
     caoHeadRotY: -0.05,
     caoHeadRotX: 0.03,
+    caoLean: 0,
     caoBrowLift: 0.0,
     nongHeadRotY: -0.05,
     nongHeadRotX: 0.02,
+    nongLean: 0,
     nongLidTilt: 0.02,
     nongSteamScale: 0.65,
     nongBrowTilt: 0.16,
@@ -38,12 +45,15 @@ export const PHASE_CHARACTER_POSES: Record<ScenePhase, CharacterPoseState> = {
   decision: {
     caHeadRotY: 0.14,
     caHeadRotX: 0.08,
+    caLean: 0,
     caLidOffset: -0.01,
     caoHeadRotY: 0.02,
     caoHeadRotX: 0.09,
+    caoLean: 0,
     caoBrowLift: -0.012,
     nongHeadRotY: -0.1,
     nongHeadRotX: 0.08,
+    nongLean: 0,
     nongLidTilt: 0.08,
     nongSteamScale: 1.0,
     nongBrowTilt: 0.3,
@@ -51,17 +61,107 @@ export const PHASE_CHARACTER_POSES: Record<ScenePhase, CharacterPoseState> = {
   review: {
     caHeadRotY: 0.22,
     caHeadRotX: -0.05,
+    caLean: 0,
     caLidOffset: 0.024,
     caoHeadRotY: -0.14,
     caoHeadRotX: -0.04,
+    caoLean: 0,
     caoBrowLift: 0.026,
     nongHeadRotY: -0.16,
     nongHeadRotX: -0.06,
+    nongLean: 0,
     nongLidTilt: 0.28,
     nongSteamScale: 1.45,
     nongBrowTilt: -0.12,
   },
 };
+
+const LIVE_NEUTRAL_EXPRESSION = {
+  caLidOffset: 0.0,
+  caoBrowLift: 0.0,
+  nongLidTilt: 0.04,
+  nongSteamScale: 0.78,
+  nongBrowTilt: 0.18,
+} as const;
+
+/**
+ * Live-mode character posture based strictly on public turn order (no inferred tells).
+ * The active rival leans subtly forward toward the table while other occupied rivals
+ * turn their gaze toward the active seat.
+ */
+export function getLiveCharacterPose(
+  activeRival: SceneRival | null,
+  heroActive: boolean,
+): CharacterPoseState {
+  if (activeRival === 'ca') {
+    return {
+      ...LIVE_NEUTRAL_EXPRESSION,
+      caHeadRotY: 0.08,
+      caHeadRotX: 0.1,
+      caLean: 0.095,
+      caoHeadRotY: -0.34,
+      caoHeadRotX: 0.03,
+      caoLean: 0,
+      nongHeadRotY: -0.26,
+      nongHeadRotX: 0.03,
+      nongLean: 0,
+    };
+  }
+  if (activeRival === 'cao') {
+    return {
+      ...LIVE_NEUTRAL_EXPRESSION,
+      caHeadRotY: 0.34,
+      caHeadRotX: 0.02,
+      caLean: 0,
+      caoHeadRotY: 0.0,
+      caoHeadRotX: 0.11,
+      caoLean: 0.095,
+      nongHeadRotY: -0.34,
+      nongHeadRotX: 0.02,
+      nongLean: 0,
+    };
+  }
+  if (activeRival === 'nong') {
+    return {
+      ...LIVE_NEUTRAL_EXPRESSION,
+      caHeadRotY: 0.26,
+      caHeadRotX: 0.03,
+      caLean: 0,
+      caoHeadRotY: 0.34,
+      caoHeadRotX: 0.03,
+      caoLean: 0,
+      nongHeadRotY: -0.08,
+      nongHeadRotX: 0.1,
+      nongLean: 0.095,
+    };
+  }
+  if (heroActive) {
+    return {
+      ...LIVE_NEUTRAL_EXPRESSION,
+      caHeadRotY: -0.18,
+      caHeadRotX: 0.05,
+      caLean: 0,
+      caoHeadRotY: 0.0,
+      caoHeadRotX: 0.06,
+      caoLean: 0,
+      nongHeadRotY: 0.18,
+      nongHeadRotX: 0.05,
+      nongLean: 0,
+    };
+  }
+  return {
+    ...LIVE_NEUTRAL_EXPRESSION,
+    caHeadRotY: 0.06,
+    caHeadRotX: 0.01,
+    caLean: 0,
+    caoHeadRotY: 0.0,
+    caoHeadRotX: 0.02,
+    caoLean: 0,
+    nongHeadRotY: -0.06,
+    nongHeadRotX: 0.01,
+    nongLean: 0,
+  };
+}
 
 export function lerpCharacterPose(
   from: CharacterPoseState,
@@ -72,12 +172,15 @@ export function lerpCharacterPose(
   return {
     caHeadRotY: l(from.caHeadRotY, to.caHeadRotY),
     caHeadRotX: l(from.caHeadRotX, to.caHeadRotX),
+    caLean: l(from.caLean, to.caLean),
     caLidOffset: l(from.caLidOffset, to.caLidOffset),
     caoHeadRotY: l(from.caoHeadRotY, to.caoHeadRotY),
     caoHeadRotX: l(from.caoHeadRotX, to.caoHeadRotX),
+    caoLean: l(from.caoLean, to.caoLean),
     caoBrowLift: l(from.caoBrowLift, to.caoBrowLift),
     nongHeadRotY: l(from.nongHeadRotY, to.nongHeadRotY),
     nongHeadRotX: l(from.nongHeadRotX, to.nongHeadRotX),
+    nongLean: l(from.nongLean, to.nongLean),
     nongLidTilt: l(from.nongLidTilt, to.nongLidTilt),
     nongSteamScale: l(from.nongSteamScale, to.nongSteamScale),
     nongBrowTilt: l(from.nongBrowTilt, to.nongBrowTilt),
@@ -230,8 +333,25 @@ function buildSeatedTorso(opts: HumanoidTorsoOptions): THREE.Group {
   return body;
 }
 
+function createLeanWrapper(group: THREE.Group): {
+  readonly leanPivot: THREE.Group;
+  readonly bodyContainer: THREE.Group;
+} {
+  // Pivot near the wrists resting on the table rail so leaning forward keeps hands planted
+  const leanPivot = new THREE.Group();
+  leanPivot.position.set(0, 0.09, 0.36);
+  group.add(leanPivot);
+
+  const bodyContainer = new THREE.Group();
+  bodyContainer.position.set(0, -0.09, -0.36);
+  leanPivot.add(bodyContainer);
+
+  return { leanPivot, bodyContainer };
+}
+
 interface CaRig {
   readonly group: THREE.Group;
+  readonly leanPivot: THREE.Group;
   readonly headPivot: THREE.Group;
   readonly lidL: THREE.Mesh;
   readonly lidR: THREE.Mesh;
@@ -241,16 +361,18 @@ function buildCaCharacter(): CaRig {
   const group = new THREE.Group();
   group.name = 'CharacterCa';
 
+  const { leanPivot, bodyContainer } = createLeanWrapper(group);
+
   const body = buildSeatedTorso({
     vestColor: SCENE_COLORS.caVest,
     shirtColor: SCENE_COLORS.caShirt,
     handColor: SCENE_COLORS.caBlue,
   });
-  group.add(body);
+  bodyContainer.add(body);
 
   const headPivot = new THREE.Group();
   headPivot.position.set(0, 0.42, 0.03);
-  group.add(headPivot);
+  bodyContainer.add(headPivot);
 
   const blueMat = createMatteMaterial(SCENE_COLORS.caBlue, { roughness: 0.82 });
   const deepBlueMat = createMatteMaterial(SCENE_COLORS.caBlueDeep, { roughness: 0.8 });
@@ -376,11 +498,12 @@ function buildCaCharacter(): CaRig {
   const lidL = createFishEye(-1);
   const lidR = createFishEye(1);
 
-  return { group, headPivot, lidL, lidR };
+  return { group, leanPivot, headPivot, lidL, lidR };
 }
 
 interface CaoRig {
   readonly group: THREE.Group;
+  readonly leanPivot: THREE.Group;
   readonly headPivot: THREE.Group;
   readonly browL: THREE.Mesh;
   readonly browR: THREE.Mesh;
@@ -390,17 +513,19 @@ function buildCaoCharacter(): CaoRig {
   const group = new THREE.Group();
   group.name = 'CharacterCao';
 
+  const { leanPivot, bodyContainer } = createLeanWrapper(group);
+
   const body = buildSeatedTorso({
     vestColor: SCENE_COLORS.caoJacket,
     shirtColor: SCENE_COLORS.caoCream,
     handColor: SCENE_COLORS.caoOrange,
     tieColor: SCENE_COLORS.caoTie,
   });
-  group.add(body);
+  bodyContainer.add(body);
 
   const headPivot = new THREE.Group();
   headPivot.position.set(0, 0.42, 0.03);
-  group.add(headPivot);
+  bodyContainer.add(headPivot);
 
   const orangeMat = createMatteMaterial(SCENE_COLORS.caoOrange, { roughness: 0.85 });
   const deepOrangeMat = createMatteMaterial(SCENE_COLORS.caoOrangeDeep, { roughness: 0.84 });
@@ -546,11 +671,12 @@ function buildCaoCharacter(): CaoRig {
   const browL = brows[0] as THREE.Mesh;
   const browR = brows[1] as THREE.Mesh;
 
-  return { group, headPivot, browL, browR };
+  return { group, leanPivot, headPivot, browL, browR };
 }
 
 interface NongRig {
   readonly group: THREE.Group;
+  readonly leanPivot: THREE.Group;
   readonly headPivot: THREE.Group;
   readonly lidPivot: THREE.Group;
   readonly steamGroup: THREE.Group;
@@ -562,6 +688,8 @@ function buildNongCharacter(): NongRig {
   const group = new THREE.Group();
   group.name = 'CharacterNong';
 
+  const { leanPivot, bodyContainer } = createLeanWrapper(group);
+
   const body = buildSeatedTorso({
     vestColor: SCENE_COLORS.nongVest,
     shirtColor: SCENE_COLORS.nongSweater,
@@ -569,11 +697,11 @@ function buildNongCharacter(): NongRig {
     leanForward: 0.08,
     rightArmReach: 0.14,
   });
-  group.add(body);
+  bodyContainer.add(body);
 
   const headPivot = new THREE.Group();
   headPivot.position.set(0, 0.42, 0.04);
-  group.add(headPivot);
+  bodyContainer.add(headPivot);
 
   const kettleMat = createMatteMaterial(SCENE_COLORS.nongRed, { roughness: 0.74, metalness: 0.06 });
   const kettleDeepMat = createMatteMaterial(SCENE_COLORS.nongRedDeep, {
@@ -750,7 +878,7 @@ function buildNongCharacter(): NongRig {
   const browL = brows[0] as THREE.Mesh;
   const browR = brows[1] as THREE.Mesh;
 
-  return { group, headPivot, lidPivot, steamGroup, browL, browR };
+  return { group, leanPivot, headPivot, lidPivot, steamGroup, browL, browR };
 }
 
 function buildHeroPresence(): THREE.Group {
@@ -807,18 +935,21 @@ export function buildCharacters(): CharactersRig {
 
   const applyPose = (pose: CharacterPoseState) => {
     // Cá
+    ca.leanPivot.rotation.x = pose.caLean;
     ca.headPivot.rotation.y = pose.caHeadRotY;
     ca.headPivot.rotation.x = pose.caHeadRotX;
     ca.lidL.position.y = 0.008 + pose.caLidOffset;
     ca.lidR.position.y = 0.008 + pose.caLidOffset;
 
     // Cáo
+    cao.leanPivot.rotation.x = pose.caoLean;
     cao.headPivot.rotation.y = pose.caoHeadRotY;
     cao.headPivot.rotation.x = pose.caoHeadRotX;
     cao.browL.position.y = 0.295 + pose.caoBrowLift;
     cao.browR.position.y = 0.295 + pose.caoBrowLift;
 
     // Nóng
+    nong.leanPivot.rotation.x = pose.nongLean;
     nong.headPivot.rotation.y = pose.nongHeadRotY;
     nong.headPivot.rotation.x = pose.nongHeadRotX;
     nong.lidPivot.rotation.z = pose.nongLidTilt;
@@ -827,7 +958,14 @@ export function buildCharacters(): CharactersRig {
     nong.browR.rotation.z = Math.PI / 2 + pose.nongBrowTilt;
   };
 
+  const setOccupiedRivals = (occupiedRivals: readonly SceneRival[]) => {
+    const occupied = new Set<SceneRival>(occupiedRivals);
+    ca.group.visible = occupied.has('ca');
+    cao.group.visible = occupied.has('cao');
+    nong.group.visible = occupied.has('nong');
+  };
+
   applyPose(PHASE_CHARACTER_POSES.arrival);
 
-  return { root, applyPose };
+  return { root, applyPose, setOccupiedRivals };
 }

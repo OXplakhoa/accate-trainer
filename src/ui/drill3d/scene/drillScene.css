@@ -135,6 +135,53 @@
   background: #e18a46;
 }
 
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='idle'] .drill3d-phase-dot {
+  background: #8a7565;
+}
+
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='preflop'] .drill3d-phase-dot {
+  background: #34786d;
+}
+
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='flop'] .drill3d-phase-dot,
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='turn'] .drill3d-phase-dot {
+  background: #e18a46;
+}
+
+.drill3d-scene[data-mode='live'] .drill3d-phase-badge[data-street='river'] .drill3d-phase-dot {
+  background: #c95849;
+}
+
+.drill3d-active-turn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(255, 248, 230, 0.94);
+  border: 1.5px solid #d79928;
+  color: #3e2a16;
+  font-size: 0.74rem;
+  line-height: 1.2;
+  box-shadow: 0 2px 8px rgba(83, 60, 49, 0.12);
+  backdrop-filter: blur(6px);
+}
+
+.drill3d-active-turn[data-active-rival='hero'] {
+  border-color: #34786d;
+  background: rgba(235, 248, 244, 0.95);
+  color: #1f4c45;
+}
+
+.drill3d-active-turn-label {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.drill3d-active-turn-name {
+  font-weight: 800;
+}
+
 .drill3d-rivals-legend {
   display: inline-flex;
   align-items: center;
@@ -153,6 +200,16 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.drill3d-rival-tag[data-active='true'] {
+  background: #fff2cc;
+  border-color: #d79928;
+  color: #2b1d12;
+  font-weight: 800;
 }
 
 .drill3d-rival-swatch {
