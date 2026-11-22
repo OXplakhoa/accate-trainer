@@ -12,6 +12,11 @@ export function toLiveSceneSnapshot(view: SandboxTableView): SceneTableSnapshot 
     heroCards: view.heroCards,
     board: view.board,
     live: {
+      potChips: view.potChips,
+      handNumber: view.handNumber,
+      timelineLength: view.timelineLength,
+      seats: view.seats,
+      payoutTransfers: view.payoutTransfers,
       street: view.street,
       occupiedRivals: view.occupiedRivals.filter(isSceneRival),
       activeRival: view.activeRival && isSceneRival(view.activeRival) ? view.activeRival : null,

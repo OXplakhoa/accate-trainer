@@ -22,7 +22,7 @@ function drawRoundedRectPath(
   ctx.closePath();
 }
 
-function drawSuitSymbol(
+export function drawSuitSymbol(
   ctx: CanvasRenderingContext2D,
   suit: CardSuit,
   cx: number,
@@ -75,8 +75,15 @@ function drawSuitSymbol(
     case '♣': {
       const r = size * 0.25;
       ctx.arc(0, -r * 1.18, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
       ctx.arc(-r * 1.08, r * 0.14, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
       ctx.arc(r * 1.08, r * 0.14, r, 0, Math.PI * 2);
+      ctx.closePath();
       ctx.fill();
       ctx.beginPath();
       ctx.moveTo(-r * 0.32, r * 0.1);

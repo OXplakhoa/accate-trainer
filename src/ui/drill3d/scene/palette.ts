@@ -107,6 +107,10 @@ export function disposeObject3DResources(
   const textures = new Set<THREE.Texture>();
 
   root.traverse((obj) => {
+    const instanced = obj as THREE.InstancedMesh;
+    if (instanced.isInstancedMesh) {
+      instanced.dispose();
+    }
     const mesh = obj as THREE.Mesh;
     if (mesh.geometry && typeof mesh.geometry.dispose === 'function') {
       geometries.add(mesh.geometry);

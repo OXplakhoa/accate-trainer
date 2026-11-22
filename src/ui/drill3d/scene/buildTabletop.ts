@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { LessonHighlight, SceneRival, SceneTableSnapshot } from '../contract';
-import { buildChipStacksForAmount, getUnseenHearts, parseCard } from './outs';
+import { buildChipStacks, CHIP_DENOMS, CHIP_RADIUS, chipsForAmount, getUnseenHearts, layoutChipColumns, parseCard } from './outs';
+import type { ChipCounts } from '../../../engine';
 import { createMatteMaterial, disposeObject3DResources, SCENE_COLORS } from './palette';
 import {
   ALL_SCENE_RIVALS,
@@ -28,7 +29,6 @@ export interface TabletopRig {
 const CARD_W = 0.31;
 const CARD_H = 0.43;
 const CARD_THICK = 0.008;
-const CHIP_RADIUS = 0.072;
 const CHIP_HEIGHT = 0.022;
 const BOARD_XS: readonly number[] = [-0.74, -0.36, 0.02, 0.4, 0.78];
 const BOARD_Z = -0.22;
@@ -177,6 +177,39 @@ function buildChipStackMesh(
   return stack;
 }
 
+/** A compact pile with one instanced mesh per denomination; dispose with the scene helpers. */
+export function createChipPile(chips: ChipCounts): THREE.Group {
+  const group = new THREE.Group();
+  const stacks = buildChipStacks(chips);
+  const offsets = layoutChipColumns(stacks.length);
+  const denominations = [...new Set(stacks.map(s => s.denom.value))];
+  for (const denomination of denominations) {
+    const selected = stacks.filter(s => s.denom.value === denomination);
+    const spec = selected[0]!.denom;
+    const edge = createChipEdgeTexture(spec.bodyHex, spec.stripeHex);
+    const top = createChipTopTexture(spec.bodyHex, spec.stripeHex, spec.accentHex, String(spec.value));
+    const mats = [createMatteMaterial(0xffffff, { map: edge }), createMatteMaterial(0xffffff, { map: top })];
+    const geometry = new THREE.CylinderGeometry(CHIP_RADIUS, CHIP_RADIUS, CHIP_HEIGHT, 24);
+    const mesh = new THREE.InstancedMesh(geometry, [mats[0]!, mats[1]!, mats[1]!], selected.reduce((n, s) => n + s.count, 0));
+    const dummy = new THREE.Object3D();
+    let instance = 0;
+    for (const stack of selected) {
+      const column = stacks.indexOf(stack);
+      const { x, z } = offsets[column]!;
+      for (let i = 0; i < stack.count; i++) {
+        dummy.position.set(x, CHIP_HEIGHT * (i + 0.5), z);
+        dummy.rotation.y = i * 0.55;
+        dummy.updateMatrix();
+        mesh.setMatrixAt(instance++, dummy.matrix);
+      }
+    }
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  return group;
+}
+
 export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
   const root = new THREE.Group();
   root.name = 'Tabletop';
@@ -243,17 +276,17 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     count: number;
   }[] = [
     // Cá
-    { x: -1.38, z: -0.42, body: '#4F9DD3', stripe: '#F7EFE2', accent: '#D8ECFA', label: '10', count: 5 },
-    { x: -1.24, z: -0.34, body: '#2E6A5E', stripe: '#F3E8D4', accent: '#A7D3C7', label: '25', count: 3 },
+    { x: -1.38, z: -0.42, body: CHIP_DENOMS[10].bodyHex, stripe: CHIP_DENOMS[10].stripeHex, accent: CHIP_DENOMS[10].accentHex, label: '10', count: 5 },
+    { x: -1.24, z: -0.34, body: CHIP_DENOMS[100].bodyHex, stripe: CHIP_DENOMS[100].stripeHex, accent: CHIP_DENOMS[100].accentHex, label: '100', count: 3 },
     // Cáo
-    { x: 0.42, z: -0.95, body: '#E18A46', stripe: '#F7EFE2', accent: '#F7E7CA', label: '25', count: 6 },
-    { x: 0.56, z: -0.88, body: '#C95849', stripe: '#F5EAD8', accent: '#E9C890', label: '50', count: 3 },
+    { x: 0.42, z: -0.95, body: CHIP_DENOMS[100].bodyHex, stripe: CHIP_DENOMS[100].stripeHex, accent: CHIP_DENOMS[100].accentHex, label: '100', count: 6 },
+    { x: 0.56, z: -0.88, body: CHIP_DENOMS[50].bodyHex, stripe: CHIP_DENOMS[50].stripeHex, accent: CHIP_DENOMS[50].accentHex, label: '50', count: 3 },
     // Nóng
-    { x: 1.38, z: -0.42, body: '#C95849', stripe: '#F5EAD8', accent: '#E9C890', label: '50', count: 5 },
-    { x: 1.24, z: -0.34, body: '#D89A46', stripe: '#533C31', accent: '#F7E7CA', label: '5', count: 4 },
+    { x: 1.38, z: -0.42, body: CHIP_DENOMS[50].bodyHex, stripe: CHIP_DENOMS[50].stripeHex, accent: CHIP_DENOMS[50].accentHex, label: '50', count: 5 },
+    { x: 1.24, z: -0.34, body: CHIP_DENOMS[5].bodyHex, stripe: CHIP_DENOMS[5].stripeHex, accent: CHIP_DENOMS[5].accentHex, label: '5', count: 4 },
     // Hero personal reserve stack (left side of Hero)
-    { x: -0.78, z: 0.86, body: '#2E6A5E', stripe: '#F3E8D4', accent: '#A7D3C7', label: '25', count: 5 },
-    { x: -0.63, z: 0.92, body: '#4F9DD3', stripe: '#F7EFE2', accent: '#D8ECFA', label: '10', count: 6 },
+    { x: -0.78, z: 0.86, body: CHIP_DENOMS[100].bodyHex, stripe: CHIP_DENOMS[100].stripeHex, accent: CHIP_DENOMS[100].accentHex, label: '100', count: 5 },
+    { x: -0.63, z: 0.92, body: CHIP_DENOMS[10].bodyHex, stripe: CHIP_DENOMS[10].stripeHex, accent: CHIP_DENOMS[10].accentHex, label: '10', count: 6 },
   ];
 
   for (const s of seatStacks) {
@@ -382,7 +415,7 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
         isLive && spot.live?.activeRival === rival && occupiedSet.has(rival);
     }
 
-    const cardsAndChipsKey = `${isLive ? 'L' : 'D'}:${spot.pot}:${spot.call}:${spot.heroCards.join(',')}:${spot.board.join(',')}`;
+    const cardsAndChipsKey = `${isLive ? 'L' : 'D'}:${spot.pot}:${JSON.stringify(spot.live?.potChips)}:${spot.call}:${spot.heroCards.join(',')}:${spot.board.join(',')}`;
     if (cardsAndChipsKey === currentCardsAndChipsKey) {
       applyHighlightState(currentHighlight);
       return;
@@ -441,87 +474,9 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       heroCardsGroup.add(cardHolder);
     });
 
-    // 3. Pot Chip Cluster (illustrative chips matching actual pot; empty when pot <= 0)
-    if (isLive) {
-      const potStacks = buildChipStacksForAmount(spot.pot).slice(0, 5);
-      const livePotPositions: readonly [number, number][] = [
-        [-0.14, -0.02],
-        [0.04, -0.09],
-        [0.18, 0.02],
-        [-0.04, 0.12],
-        [0.12, 0.13],
-      ];
-      potStacks.forEach((item, i) => {
-        const pos = livePotPositions[i % livePotPositions.length] ?? [0, 0];
-        const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
-        const topTex = createChipTopTexture(
-          item.denom.bodyHex,
-          item.denom.stripeHex,
-          item.denom.accentHex,
-          String(item.denom.value),
-        );
-        potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
-      });
-    } else {
-      const potPreBet = Math.max(0, spot.pot - spot.call);
-      const potCoreStacks = buildChipStacksForAmount(potPreBet);
-      const oppBetStacks = buildChipStacksForAmount(spot.call);
-
-      const corePositions: readonly [number, number][] = [
-        [-0.18, -0.04],
-        [-0.02, -0.12],
-        [-0.14, 0.11],
-        [0.03, 0.06],
-      ];
-      potCoreStacks.forEach((item, i) => {
-        const pos = corePositions[i % corePositions.length] ?? [0, 0];
-        const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
-        const topTex = createChipTopTexture(
-          item.denom.bodyHex,
-          item.denom.stripeHex,
-          item.denom.accentHex,
-          String(item.denom.value),
-        );
-        potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
-      });
-
-      // Opponent's active bet nestled on the right edge of the pot circle (part of displayed pot)
-      const oppBetPositions: readonly [number, number][] = [
-        [0.2, -0.03],
-        [0.24, 0.1],
-        [0.14, 0.13],
-      ];
-      oppBetStacks.forEach((item, i) => {
-        const pos = oppBetPositions[i % oppBetPositions.length] ?? [0.2, 0];
-        const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
-        const topTex = createChipTopTexture(
-          item.denom.bodyHex,
-          item.denom.stripeHex,
-          item.denom.accentHex,
-          String(item.denom.value),
-        );
-        potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
-      });
-    }
-
-    // 4. Hero's Required Call Chip Stack (distinct zone toward Hero; empty when call <= 0)
-    const callStacks = buildChipStacksForAmount(spot.call).slice(0, 3);
-    const callOffsets: readonly [number, number][] = [
-      [-0.08, 0.0],
-      [0.08, -0.03],
-      [0.01, 0.09],
-    ];
-    callStacks.forEach((item, i) => {
-      const pos = callOffsets[i % callOffsets.length] ?? [0, 0];
-      const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
-      const topTex = createChipTopTexture(
-        item.denom.bodyHex,
-        item.denom.stripeHex,
-        item.denom.accentHex,
-        String(item.denom.value),
-      );
-      callChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
-    });
+    // Real pot counts in live mode; hypothetical amounts in Drill and Call.
+    potChipsGroup.add(createChipPile(spot.live?.potChips ?? chipsForAmount(spot.pot)));
+    callChipsGroup.add(createChipPile(chipsForAmount(spot.call)));
 
     // 5. Ghostly Unseen Heart Outs Fan (Drill mode only — live mode shows no assumption ghost outs)
     if (!isLive) {

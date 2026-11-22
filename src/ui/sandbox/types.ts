@@ -194,9 +194,27 @@ export interface SandboxExternalApi {
   readonly playTimerTick?: (urgent?: boolean) => void;
 }
 
+export type TableSeatId = 'hero' | 'ca' | 'cao' | 'nong';
+export interface PublicTableSeat {
+  readonly id: TableSeatId;
+  readonly stackChips: ChipCounts;
+  /** Action chips on this street, less refunds where denominations allow. */
+  readonly streetChips: ChipCounts;
+  readonly status: 'active' | 'folded' | 'all-in' | 'out';
+  readonly lastAction: { readonly type: BettingAction['type']; readonly amount: number } | null;
+  readonly isActor: boolean;
+  readonly isWinner: boolean;
+  readonly revealedCards: readonly string[] | null;
+}
+
 /** Public table information and Hero's own cards, safe for alternative table views. */
 export interface SandboxTableView {
   readonly pot: number;
+  readonly potChips: ChipCounts;
+  readonly handNumber: number;
+  readonly timelineLength: number;
+  readonly seats: readonly PublicTableSeat[];
+  readonly payoutTransfers: readonly { readonly seatId: TableSeatId; readonly chips: ChipCounts }[];
   readonly call: number;
   readonly heroCards: readonly string[];
   readonly board: readonly string[];

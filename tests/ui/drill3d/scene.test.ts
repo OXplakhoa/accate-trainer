@@ -36,6 +36,7 @@ function makeLiveSpot(
     board: ['K♥', '8♦', '5♣'],
     ...rest,
     live: {
+      potChips: { 5: 1, 10: 0, 50: 1, 100: 0 }, handNumber: 1, timelineLength: 0, seats: [], payoutTransfers: [],
       street: 'flop',
       occupiedRivals: ['ca', 'cao', 'nong'],
       activeRival: 'ca',
@@ -165,6 +166,24 @@ describe('drill3d scene snapshot helpers', () => {
 });
 
 describe('drill3d pure scene motion and on-demand render planner', () => {
+  it('renders when physical pot denominations change at the same value', () => {
+    const before = makeMotionState({ spot: makeLiveSpot({ pot: 120, live: { potChips: { 5: 4, 10: 0, 50: 0, 100: 1 } } }) });
+    const after = makeMotionState({ spot: makeLiveSpot({ pot: 120, live: { potChips: { 5: 4, 10: 0, 50: 2, 100: 0 } } }) });
+    expect(planSceneMotion(before, after).needsRender).toBe(true);
+    expect(planSceneMotion(after, { ...after }).needsRender).toBe(false);
+  });
+
+  it('renders all physical pot chips in the fallback', () => {
+    vi.spyOn(globalThis.performance, 'now').mockReturnValue(0);
+    const html = renderToStaticMarkup(createElement(FallbackScene, {
+      phase: 'decision', highlight: null,
+      spot: makeLiveSpot({ pot: 160, call: 0, live: { potChips: { 5: 12, 10: 10, 50: 0, 100: 0 } } }),
+    }));
+    expect((html.match(/fill="#b23b32"/g) ?? [])).toHaveLength(12);
+    expect((html.match(/fill="#206785"/g) ?? [])).toHaveLength(10);
+    vi.restoreAllMocks();
+  });
+
   it('identifies Hero decision turn accurately', () => {
     expect(isHeroDecisionTurn(DEMO_SPOT)).toBe(false);
     expect(

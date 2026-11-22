@@ -11,6 +11,7 @@ import {
   type SeatState,
   type TableSeat as BoundarySeat,
 } from '../../engine';
+import { buildSandboxTableView } from './tableView';
 import { ChipSvg } from './assets/ChipSvg';
 import { PlayingCard } from './assets/PlayingCard';
 import { SandboxAudioEngine } from './audio';
@@ -57,7 +58,6 @@ import {
 } from './dealAnimation';
 import {
   formatChipBreakdown,
-  formatCardShort,
   formatNumberVi,
   formatStreetLabel,
   formatTimelineEventVi,
@@ -598,21 +598,7 @@ export function SandboxApp({
       ? activeHand.seats
       : (session.boundary?.seats ?? []);
 
-  const actorId = activeHand?.phase === 'betting' ? activeHand.activePlayerId : null;
-  const tableView = renderTableView?.({
-    pot: potValue,
-    call: validation.callAmount ?? 0,
-    heroCards: heroSeat?.holeCards.map(formatCardShort) ?? [],
-    board: activeHand?.board.map(formatCardShort) ?? [],
-    street: activeHand?.street ?? null,
-    occupiedRivals: seatsToRender.flatMap((seat) => {
-      const rival = session.seatProfiles[seat.playerId]?.rivalId;
-      return rival ? [rival] : [];
-    }),
-    activeRival: actorId ? session.seatProfiles[actorId]?.rivalId ?? null : null,
-    activePlayerName: actorId ? getPlayerName(actorId, session.seatProfiles) : null,
-    reducedMotion: effectiveReducedMotion,
-  });
+  const tableView = renderTableView?.(buildSandboxTableView(session, validation.callAmount ?? 0, effectiveReducedMotion));
 
   const canPracticeCurrentSpot =
     onPracticeSpot !== undefined &&
