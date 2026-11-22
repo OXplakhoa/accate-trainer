@@ -3,6 +3,31 @@ import { AudioCore } from '../audio/AudioCore';
 import { TableSounds } from '../audio/TableSounds';
 import type { AudioSettings } from './types';
 
+/**
+ * Stereo position of each seat, matching the 3D table: Cá sits left, Nóng right,
+ * Cáo across from Hero (centre).
+ */
+export const SANDBOX_SEAT_PAN: Readonly<Record<string, number>> = Object.freeze({
+  hero: 0,
+  ca: -0.6,
+  cao: 0,
+  nong: 0.6,
+});
+
+/**
+ * Decide whether the Hero turn cue should sound. It plays once per Hero turn identity,
+ * never between turns and never again for the same identity (re-renders, settings changes).
+ */
+export function resolveHeroTurnCue(
+  lastCuedKey: string | null,
+  isHeroTurn: boolean,
+  heroTurnKey: string,
+): { play: boolean; nextKey: string | null } {
+  if (!isHeroTurn) return { play: false, nextKey: lastCuedKey };
+  if (lastCuedKey === heroTurnKey) return { play: false, nextKey: lastCuedKey };
+  return { play: true, nextKey: heroTurnKey };
+}
+
 export class SandboxAudioEngine {
   private readonly audio: AudioCore;
   private readonly sounds: TableSounds;

@@ -14,7 +14,7 @@ import {
 import { buildSandboxTableView } from './tableView';
 import { ChipSvg } from './assets/ChipSvg';
 import { PlayingCard } from './assets/PlayingCard';
-import { SandboxAudioEngine } from './audio';
+import { resolveHeroTurnCue, SANDBOX_SEAT_PAN, SandboxAudioEngine } from './audio';
 import { BoundaryPanel } from './components/BoundaryPanel';
 import { ExchangeModal } from './components/ExchangeModal';
 import { HandReviewModal } from './components/HandReviewModal';
@@ -169,9 +169,11 @@ export function SandboxApp({
   const audioRef = useRef<SandboxAudioEngine | null>(null);
   if (audioRef.current === null) {
     audioRef.current = new SandboxAudioEngine(session.appliedSettings.audio);
+    audioRef.current.setSeatPan(SANDBOX_SEAT_PAN);
   }
 
   const processedTurnKeyRef = useRef<string | null>(null);
+  const heroTurnCueKeyRef = useRef<string | null>(null);
   const pendingDealRef = useRef<PendingDealDescriptor | null>(null);
   const completedDealKeyRef = useRef<string | null>(null);
   const lastAudioSessionSeedRef = useRef<string>(session.sessionSeed);
@@ -294,6 +296,15 @@ export function SandboxApp({
     activeHand !== null
       ? `${session.sessionSeed}:${session.handNumber}:${activeHand.phase}:${activeHand.activePlayerId}:${activeHand.timeline.length}:${dealGenerationRef.current}`
       : 'between';
+
+  // Soft cue once per Hero turn identity (AudioCore stays silent until a user gesture unlocks it).
+  useEffect(() => {
+    const decision = resolveHeroTurnCue(heroTurnCueKeyRef.current, isHeroTurn, heroTurnKey);
+    heroTurnCueKeyRef.current = decision.nextKey;
+    if (decision.play) {
+      audioRef.current?.playHeroTurnCue();
+    }
+  }, [heroTurnKey, isHeroTurn]);
 
   const appliedTimerSeconds = session.appliedSettings.tournamentTimerSeconds;
   const pendingTimerSeconds = session.pendingSettings?.tournamentTimerSeconds ?? null;
