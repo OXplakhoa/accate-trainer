@@ -66,10 +66,10 @@ describe('live Sandbox table integration', () => {
       live: { potChips: view.potChips, handNumber: 1, timelineLength: 2, seats: [], payoutTransfers: [], street: 'river', occupiedRivals: ['ca', 'nong'], activeRival: 'nong', activePlayerName: 'Nóng' },
     });
     const boundary = toLiveSceneSnapshot({
-      ...view, pot: 0, call: 0, heroCards: [], board: [], street: null,
+      ...view, pot: 0, potChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, call: 0, heroCards: [], board: [], street: null,
       occupiedRivals: ['cao'], activeRival: null, activePlayerName: null,
     });
-    expect(boundary.live).toEqual({ potChips: view.potChips, handNumber: 1, timelineLength: 2, seats: [], payoutTransfers: [], street: null, occupiedRivals: ['cao'], activeRival: null, activePlayerName: null });
+    expect(boundary.live).toEqual({ potChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, handNumber: 1, timelineLength: 2, seats: [], payoutTransfers: [], street: null, occupiedRivals: ['cao'], activeRival: null, activePlayerName: null });
     expect(boundary.board).toEqual([]);
   });
 

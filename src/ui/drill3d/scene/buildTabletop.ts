@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LessonHighlight, SceneRival, SceneTableSnapshot } from '../contract';
-import { buildChipStacks, CHIP_RADIUS, chipsForAmount, getUnseenHearts, layoutChipColumns, parseCard } from './outs';
+import { buildChipStacks, CHIP_DENOMS, CHIP_RADIUS, chipsForAmount, getUnseenHearts, layoutChipColumns, parseCard } from './outs';
 import type { ChipCounts } from '../../../engine';
 import { createMatteMaterial, disposeObject3DResources, SCENE_COLORS } from './palette';
 import {
@@ -276,17 +276,17 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     count: number;
   }[] = [
     // Cá
-    { x: -1.38, z: -0.42, body: '#4F9DD3', stripe: '#F7EFE2', accent: '#D8ECFA', label: '10', count: 5 },
-    { x: -1.24, z: -0.34, body: '#2E6A5E', stripe: '#F3E8D4', accent: '#A7D3C7', label: '25', count: 3 },
+    { x: -1.38, z: -0.42, body: CHIP_DENOMS[10].bodyHex, stripe: CHIP_DENOMS[10].stripeHex, accent: CHIP_DENOMS[10].accentHex, label: '10', count: 5 },
+    { x: -1.24, z: -0.34, body: CHIP_DENOMS[100].bodyHex, stripe: CHIP_DENOMS[100].stripeHex, accent: CHIP_DENOMS[100].accentHex, label: '100', count: 3 },
     // Cáo
-    { x: 0.42, z: -0.95, body: '#E18A46', stripe: '#F7EFE2', accent: '#F7E7CA', label: '25', count: 6 },
-    { x: 0.56, z: -0.88, body: '#C95849', stripe: '#F5EAD8', accent: '#E9C890', label: '50', count: 3 },
+    { x: 0.42, z: -0.95, body: CHIP_DENOMS[100].bodyHex, stripe: CHIP_DENOMS[100].stripeHex, accent: CHIP_DENOMS[100].accentHex, label: '100', count: 6 },
+    { x: 0.56, z: -0.88, body: CHIP_DENOMS[50].bodyHex, stripe: CHIP_DENOMS[50].stripeHex, accent: CHIP_DENOMS[50].accentHex, label: '50', count: 3 },
     // Nóng
-    { x: 1.38, z: -0.42, body: '#C95849', stripe: '#F5EAD8', accent: '#E9C890', label: '50', count: 5 },
-    { x: 1.24, z: -0.34, body: '#D89A46', stripe: '#533C31', accent: '#F7E7CA', label: '5', count: 4 },
+    { x: 1.38, z: -0.42, body: CHIP_DENOMS[50].bodyHex, stripe: CHIP_DENOMS[50].stripeHex, accent: CHIP_DENOMS[50].accentHex, label: '50', count: 5 },
+    { x: 1.24, z: -0.34, body: CHIP_DENOMS[5].bodyHex, stripe: CHIP_DENOMS[5].stripeHex, accent: CHIP_DENOMS[5].accentHex, label: '5', count: 4 },
     // Hero personal reserve stack (left side of Hero)
-    { x: -0.78, z: 0.86, body: '#2E6A5E', stripe: '#F3E8D4', accent: '#A7D3C7', label: '25', count: 5 },
-    { x: -0.63, z: 0.92, body: '#4F9DD3', stripe: '#F7EFE2', accent: '#D8ECFA', label: '10', count: 6 },
+    { x: -0.78, z: 0.86, body: CHIP_DENOMS[100].bodyHex, stripe: CHIP_DENOMS[100].stripeHex, accent: CHIP_DENOMS[100].accentHex, label: '100', count: 5 },
+    { x: -0.63, z: 0.92, body: CHIP_DENOMS[10].bodyHex, stripe: CHIP_DENOMS[10].stripeHex, accent: CHIP_DENOMS[10].accentHex, label: '10', count: 6 },
   ];
 
   for (const s of seatStacks) {

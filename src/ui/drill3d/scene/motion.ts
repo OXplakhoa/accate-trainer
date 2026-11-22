@@ -1,3 +1,4 @@
+import { DENOMINATIONS } from '../../../engine';
 import type {
   LessonHighlight,
   LiveSceneDetails,
@@ -274,6 +275,7 @@ export function getSceneVisualKey(state: SceneMotionState): string {
   return [
     'live',
     ...base,
+    DENOMINATIONS.map(d => live.potChips[d]).join(','),
     live.street ?? 'idle',
     live.occupiedRivals.join(','),
     live.activeRival ?? 'none',

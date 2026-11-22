@@ -1,5 +1,5 @@
 import type { LessonHighlight, ScenePhase, SceneRival, SceneTableSnapshot } from '../contract';
-import { buildChipStacksForAmount, getUnseenHearts, parseCard } from './outs';
+import { buildChipStacks, buildChipStacksForAmount, CHIP_DENOMS, getUnseenHearts, parseCard } from './outs';
 import {
   getEffectiveHighlight,
   getLiveStreetLabel,
@@ -78,8 +78,8 @@ export function FallbackScene({
           : -0.6
     : 0;
 
-  const potChipStacks = isLive ? buildChipStacksForAmount(spot.pot).slice(0, 3) : [];
-  const callChipStacks = isLive ? buildChipStacksForAmount(spot.call).slice(0, 2) : [];
+  const potChipStacks = spot.live ? buildChipStacks(spot.live.potChips) : [];
+  const callChipStacks = isLive ? buildChipStacksForAmount(spot.call) : [];
 
   // Distinct framing per phase even in 2D illustration fallback
   const viewBox =
@@ -566,10 +566,10 @@ export function FallbackScene({
         {isLive ? (
           <>
             {potChipStacks.length > 0 && (
-              <g transform="translate(288, 294)">
+              <g transform={`translate(288, 294) scale(${Math.min(1, 90 / Math.max(18, potChipStacks.length * 18))})`}>
                 {potChipStacks.map((stack, stackIdx) => {
                   const cx = (stackIdx - (potChipStacks.length - 1) / 2) * 18;
-                  const visibleChips = Math.min(4, Math.max(1, stack.count));
+                  const visibleChips = stack.count;
                   return (
                     <g key={`pot-${stack.denom.value}-${stackIdx}`}>
                       {Array.from({ length: visibleChips }).map((_, chipIdx) => (
@@ -591,10 +591,10 @@ export function FallbackScene({
             )}
 
             {callChipStacks.length > 0 && (
-              <g transform="translate(392, 308)">
+              <g transform={`translate(392, 308) scale(${Math.min(1, 64 / Math.max(16, callChipStacks.length * 16))})`}>
                 {callChipStacks.map((stack, stackIdx) => {
                   const cx = (stackIdx - (callChipStacks.length - 1) / 2) * 16;
-                  const visibleChips = Math.min(3, Math.max(1, stack.count));
+                  const visibleChips = stack.count;
                   return (
                     <g key={`call-${stack.denom.value}-${stackIdx}`}>
                       {Array.from({ length: visibleChips }).map((_, chipIdx) => (
@@ -623,8 +623,8 @@ export function FallbackScene({
                 cy="4"
                 rx="10"
                 ry="5"
-                fill="#2E6A5E"
-                stroke="#F3E8D4"
+                fill={CHIP_DENOMS[100].bodyHex}
+                stroke={CHIP_DENOMS[100].stripeHex}
                 strokeWidth="1.5"
               />
               <ellipse
@@ -632,8 +632,8 @@ export function FallbackScene({
                 cy="0"
                 rx="10"
                 ry="5"
-                fill="#2E6A5E"
-                stroke="#F3E8D4"
+                fill={CHIP_DENOMS[100].bodyHex}
+                stroke={CHIP_DENOMS[100].stripeHex}
                 strokeWidth="1.5"
               />
               <ellipse
@@ -641,8 +641,8 @@ export function FallbackScene({
                 cy="6"
                 rx="10"
                 ry="5"
-                fill="#C95849"
-                stroke="#F5EAD8"
+                fill={CHIP_DENOMS[5].bodyHex}
+                stroke={CHIP_DENOMS[5].stripeHex}
                 strokeWidth="1.5"
               />
               <ellipse
@@ -650,8 +650,8 @@ export function FallbackScene({
                 cy="2"
                 rx="10"
                 ry="5"
-                fill="#C95849"
-                stroke="#F5EAD8"
+                fill={CHIP_DENOMS[5].bodyHex}
+                stroke={CHIP_DENOMS[5].stripeHex}
                 strokeWidth="1.5"
               />
               <ellipse
@@ -659,8 +659,8 @@ export function FallbackScene({
                 cy="-2"
                 rx="10"
                 ry="5"
-                fill="#C95849"
-                stroke="#F5EAD8"
+                fill={CHIP_DENOMS[5].bodyHex}
+                stroke={CHIP_DENOMS[5].stripeHex}
                 strokeWidth="1.5"
               />
               <ellipse
@@ -668,8 +668,8 @@ export function FallbackScene({
                 cy="4"
                 rx="10"
                 ry="5"
-                fill="#4F9DD3"
-                stroke="#F7EFE2"
+                fill={CHIP_DENOMS[10].bodyHex}
+                stroke={CHIP_DENOMS[10].stripeHex}
                 strokeWidth="1.5"
               />
               <ellipse
@@ -677,8 +677,8 @@ export function FallbackScene({
                 cy="0"
                 rx="10"
                 ry="5"
-                fill="#4F9DD3"
-                stroke="#F7EFE2"
+                fill={CHIP_DENOMS[10].bodyHex}
+                stroke={CHIP_DENOMS[10].stripeHex}
                 strokeWidth="1.5"
               />
             </g>
@@ -689,8 +689,8 @@ export function FallbackScene({
                 cy="3"
                 rx="9.5"
                 ry="4.8"
-                fill="#D89A46"
-                stroke="#533C31"
+                fill={CHIP_DENOMS[50].bodyHex}
+                stroke={CHIP_DENOMS[50].stripeHex}
                 strokeWidth="1.4"
               />
               <ellipse
@@ -698,8 +698,8 @@ export function FallbackScene({
                 cy="-1"
                 rx="9.5"
                 ry="4.8"
-                fill="#D89A46"
-                stroke="#533C31"
+                fill={CHIP_DENOMS[50].bodyHex}
+                stroke={CHIP_DENOMS[50].stripeHex}
                 strokeWidth="1.4"
               />
               <ellipse
@@ -707,8 +707,8 @@ export function FallbackScene({
                 cy="2"
                 rx="9.5"
                 ry="4.8"
-                fill="#C95849"
-                stroke="#F5EAD8"
+                fill={CHIP_DENOMS[5].bodyHex}
+                stroke={CHIP_DENOMS[5].stripeHex}
                 strokeWidth="1.4"
               />
               <ellipse
@@ -716,8 +716,8 @@ export function FallbackScene({
                 cy="-2"
                 rx="9.5"
                 ry="4.8"
-                fill="#C95849"
-                stroke="#F5EAD8"
+                fill={CHIP_DENOMS[5].bodyHex}
+                stroke={CHIP_DENOMS[5].stripeHex}
                 strokeWidth="1.4"
               />
             </g>

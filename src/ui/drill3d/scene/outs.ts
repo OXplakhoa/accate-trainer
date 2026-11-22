@@ -110,7 +110,7 @@ export interface ChipDenomSpec {
   readonly accentHex: string;
 }
 
-const CHIP_DENOMS: Readonly<Record<Denomination, ChipDenomSpec>> = {
+export const CHIP_DENOMS: Readonly<Record<Denomination, ChipDenomSpec>> = {
   5: { value: 5, bodyHex: '#b23b32', stripeHex: '#f5eee2', accentHex: '#faf3e6' },
   10: { value: 10, bodyHex: '#206785', stripeHex: '#edc28d', accentHex: '#f2f7f9' },
   50: { value: 50, bodyHex: '#b87a24', stripeHex: '#194a38', accentHex: '#fcf5e6' },

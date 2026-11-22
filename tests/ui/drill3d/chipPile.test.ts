@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHIP_RADIUS, layoutChipColumns } from '../../../src/ui/drill3d/scene/outs';
 
 describe('chip pile resources and layout', () => {
@@ -28,4 +28,33 @@ describe('chip pile resources and layout', () => {
       random.mockRestore();
     }
   });
+});
+
+vi.mock('../../../src/ui/drill3d/scene/textures', async () => {
+  const three = await import('three');
+  return {
+    createChipEdgeTexture: () => new three.Texture(),
+    createChipTopTexture: (_body: string, _stripe: string, _accent: string, label: string) => {
+      const texture = new three.Texture();
+      texture.name = label;
+      return texture;
+    },
+  };
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+it('creates one real instanced mesh per non-empty denomination', async () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const THREE = await import('three');
+  const { createChipPile } = await import('../../../src/ui/drill3d/scene/buildTabletop');
+  const pile = createChipPile({ 5: 3, 10: 0, 50: 12, 100: 1 });
+  expect(pile.children).toHaveLength(3);
+  const counts = Object.fromEntries(pile.children.map(child => {
+    expect(child).toBeInstanceOf(THREE.InstancedMesh);
+    const mesh = child as import('three').InstancedMesh;
+    const material = (mesh.material as import('three').MeshStandardMaterial[])[1]!;
+    return [material.map!.name, mesh.count];
+  }));
+  expect(counts).toEqual({ 5: 3, 50: 12, 100: 1 });
 });
