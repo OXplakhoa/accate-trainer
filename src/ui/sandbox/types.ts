@@ -213,6 +213,7 @@ export interface SandboxTableView {
   readonly potChips: ChipCounts;
   readonly handNumber: number;
   readonly timelineLength: number;
+  readonly dealerSeatId: TableSeatId | null;
   readonly seats: readonly PublicTableSeat[];
   readonly payoutTransfers: readonly { readonly seatId: TableSeatId; readonly chips: ChipCounts }[];
   readonly call: number;

@@ -55,7 +55,7 @@ describe('live Sandbox table integration', () => {
 
   it('maps live values and only supported occupied rivals, including boundary state', () => {
     const view: SandboxTableView = {
-      potChips: { 5: 0, 10: 3, 50: 0, 100: 2 }, handNumber: 1, timelineLength: 2, seats: [], payoutTransfers: [],
+      potChips: { 5: 0, 10: 3, 50: 0, 100: 2 }, handNumber: 1, timelineLength: 2, dealerSeatId: 'hero', seats: [], payoutTransfers: [],
       pot: 230, call: 25, heroCards: ['A♥', '10♠'],
       board: ['2♣', '3♦', '4♥', '5♠', '6♣'], street: 'river',
       occupiedRivals: ['ca', 'nong', 'da'], activeRival: 'nong',
@@ -63,13 +63,13 @@ describe('live Sandbox table integration', () => {
     };
     expect(toLiveSceneSnapshot(view)).toEqual({
       pot: 230, call: 25, heroCards: view.heroCards, board: view.board,
-      live: { potChips: view.potChips, handNumber: 1, timelineLength: 2, seats: [], payoutTransfers: [], street: 'river', occupiedRivals: ['ca', 'nong'], activeRival: 'nong', activePlayerName: 'Nóng' },
+      live: { potChips: view.potChips, handNumber: 1, timelineLength: 2, dealerSeatId: 'hero', seats: [], payoutTransfers: [], street: 'river', occupiedRivals: ['ca', 'nong'], activeRival: 'nong', activePlayerName: 'Nóng' },
     });
     const boundary = toLiveSceneSnapshot({
-      ...view, pot: 0, potChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, call: 0, heroCards: [], board: [], street: null,
+      ...view, pot: 0, potChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, call: 0, heroCards: [], board: [], street: null, dealerSeatId: null,
       occupiedRivals: ['cao'], activeRival: null, activePlayerName: null,
     });
-    expect(boundary.live).toEqual({ potChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, handNumber: 1, timelineLength: 2, seats: [], payoutTransfers: [], street: null, occupiedRivals: ['cao'], activeRival: null, activePlayerName: null });
+    expect(boundary.live).toEqual({ potChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, handNumber: 1, timelineLength: 2, dealerSeatId: null, seats: [], payoutTransfers: [], street: null, occupiedRivals: ['cao'], activeRival: null, activePlayerName: null });
     expect(boundary.board).toEqual([]);
   });
 

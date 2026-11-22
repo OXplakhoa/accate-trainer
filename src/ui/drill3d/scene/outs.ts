@@ -138,12 +138,22 @@ export function layoutChipColumns(count: number): readonly { x: number; z: numbe
   return offsets.map(({ x, z }) => ({ x: x - meanX, z: z - meanZ }));
 }
 
+/** Total physical chip count across all valid denominations. */
+export function countTotalChips(chips: ChipCounts): number {
+  let total = 0;
+  for (const d of DENOMINATIONS) {
+    total += chips[d];
+  }
+  return total;
+}
+
 /** Split physical counts into columns without hiding chips. */
-export function buildChipStacks(chips: ChipCounts): readonly ChipStackItem[] {
+export function buildChipStacks(chips: ChipCounts, maxPerColumn = 10): readonly ChipStackItem[] {
+  const cap = Math.max(1, Math.floor(maxPerColumn));
   const stacks: ChipStackItem[] = [];
   for (const d of [...DENOMINATIONS].reverse()) {
-    for (let remaining = chips[d]; remaining > 0; remaining -= 10) {
-      stacks.push({ denom: CHIP_DENOMS[d], count: Math.min(10, remaining) });
+    for (let remaining = chips[d]; remaining > 0; remaining -= cap) {
+      stacks.push({ denom: CHIP_DENOMS[d], count: Math.min(cap, remaining) });
     }
   }
   return stacks;
