@@ -166,6 +166,7 @@ vi.mock('three', () => {
 
   class MockLight extends MockObject3D {
     public castShadow = false;
+    public target = new MockObject3D();
     public shadow = {
       mapSize: { set: vi.fn() },
       camera: { near: 0, far: 0, left: 0, right: 0, top: 0, bottom: 0 },
@@ -214,6 +215,7 @@ vi.mock('three', () => {
     HemisphereLight: MockLight,
     DirectionalLight: MockLight,
     PointLight: MockLight,
+    SpotLight: MockLight,
     WebGLRenderer: MockWebGLRenderer,
     PCFSoftShadowMap: 2,
     SRGBColorSpace: 'srgb',

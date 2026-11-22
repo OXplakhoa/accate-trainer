@@ -112,13 +112,25 @@ function finalizeTexture(canvas: HTMLCanvasElement, repeatX = 1, repeatY = 1): T
   return texture;
 }
 
+export const CARD_TEXTURE_METRICS = {
+  width: 320,
+  height: 448,
+  cornerRankFontSingle: 108,
+  cornerRankFontDouble: 92,
+  cornerSuitSize: 72,
+  centerSuitSize: 184,
+  centerSuitGhostSize: 168,
+  bottomRankFontSingle: 72,
+  bottomRankFontDouble: 62,
+} as const;
+
 export function createCardFaceTexture(
   cardText: string,
   options: { readonly ghost?: boolean } = {},
 ): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 360;
+  canvas.width = CARD_TEXTURE_METRICS.width;
+  canvas.height = CARD_TEXTURE_METRICS.height;
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     return finalizeTexture(canvas);
@@ -129,63 +141,71 @@ export function createCardFaceTexture(
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Outer card body
-  drawRoundedRectPath(ctx, 8, 8, 240, 344, 22);
+  // Outer card body (warm cream card style)
+  drawRoundedRectPath(ctx, 8, 8, 304, 432, 26);
   ctx.fillStyle = ghost ? '#FFF5F3' : '#FBF6EC';
   ctx.fill();
 
-  ctx.lineWidth = ghost ? 6 : 5;
+  ctx.lineWidth = ghost ? 7 : 6;
   ctx.strokeStyle = ghost ? '#D95A66' : '#D5C6AE';
   if (ghost) {
-    ctx.setLineDash([14, 10]);
+    ctx.setLineDash([16, 11]);
   }
   ctx.stroke();
   ctx.setLineDash([]);
 
   // Subtle inner frame
-  drawRoundedRectPath(ctx, 20, 20, 216, 320, 14);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = ghost ? 'rgba(217, 90, 102, 0.32)' : 'rgba(83, 60, 49, 0.12)';
+  drawRoundedRectPath(ctx, 20, 20, 280, 408, 18);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = ghost ? 'rgba(217, 90, 102, 0.32)' : 'rgba(83, 60, 49, 0.13)';
   ctx.stroke();
 
   const inkColor = parsed.isRed ? '#C73B3A' : '#24292E';
+  const isDoubleRank = parsed.rank.length > 1;
+  const cornerRankPx = isDoubleRank
+    ? CARD_TEXTURE_METRICS.cornerRankFontDouble
+    : CARD_TEXTURE_METRICS.cornerRankFontSingle;
 
-  // Top-left corner rank & pip (extra bold for 3D legibility)
+  // Top-left jumbo corner rank & suit pip (extra bold for high distance legibility)
   ctx.fillStyle = inkColor;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.font =
-    parsed.rank.length > 1
-      ? '800 58px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-      : '800 66px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.fillText(parsed.rank, 28, 24);
-  drawSuitSymbol(ctx, parsed.suit, 54, 114, 42, inkColor);
+  ctx.font = `900 ${cornerRankPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+  ctx.fillText(parsed.rank, isDoubleRank ? 24 : 30, 20);
+  drawSuitSymbol(ctx, parsed.suit, 68, 162, CARD_TEXTURE_METRICS.cornerSuitSize, inkColor);
 
-  // Large central emblem
-  drawSuitSymbol(ctx, parsed.suit, 134, 204, ghost ? 112 : 122, inkColor);
+  // Prominent central suit emblem
+  drawSuitSymbol(
+    ctx,
+    parsed.suit,
+    178,
+    258,
+    ghost ? CARD_TEXTURE_METRICS.centerSuitGhostSize : CARD_TEXTURE_METRICS.centerSuitSize,
+    inkColor,
+  );
 
-  // Subtle "CHƯA RA" stamp on ghost outs cards
+  // Subtle "RIVER?" stamp on ghost outs cards
   if (ghost) {
     ctx.fillStyle = 'rgba(199, 59, 58, 0.14)';
-    drawRoundedRectPath(ctx, 32, 286, 192, 40, 12);
+    drawRoundedRectPath(ctx, 38, 360, 244, 50, 14);
     ctx.fill();
     ctx.fillStyle = '#A83238';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillText('RIVER?', 128, 307);
+    ctx.font = '800 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillText('RIVER?', 160, 386);
   } else {
-    // Bottom-right inverted small rank
+    // Bottom-right inverted jumbo rank
+    const bottomRankPx = isDoubleRank
+      ? CARD_TEXTURE_METRICS.bottomRankFontDouble
+      : CARD_TEXTURE_METRICS.bottomRankFontSingle;
     ctx.save();
-    ctx.translate(228, 336);
+    ctx.translate(292, 424);
     ctx.rotate(Math.PI);
     ctx.fillStyle = inkColor;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.font =
-      parsed.rank.length > 1
-        ? '800 40px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-        : '800 46px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.font = `900 ${bottomRankPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
     ctx.fillText(parsed.rank, 0, 0);
     ctx.restore();
   }

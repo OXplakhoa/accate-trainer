@@ -24,6 +24,7 @@ export interface CharactersRig {
 function addSculptedHand(
   parent: THREE.Group,
   handMat: THREE.MeshStandardMaterial,
+  cuffMat: THREE.MeshStandardMaterial,
   x: number,
   y: number,
   z: number,
@@ -31,30 +32,44 @@ function addSculptedHand(
   mirrorX = 1,
 ): void {
   const hand = new THREE.Group();
+  hand.name = mirrorX > 0 ? 'RivalHandLeft' : 'RivalHandRight';
   hand.position.set(x, y, z);
   hand.rotation.y = rotY;
 
-  // Rounded palm
-  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.062, 14, 12), handMat);
-  palm.scale.set(1.05, 0.56, 1.15);
+  // Tailored wrist cuff connecting the sleeve cleanly into the hand
+  const cuffGeo = new THREE.CylinderGeometry(0.046, 0.054, 0.046, 16);
+  cuffGeo.rotateX(Math.PI / 2);
+  const cuff = new THREE.Mesh(cuffGeo, cuffMat);
+  cuff.scale.set(1.12, 0.56, 1.0);
+  cuff.position.set(0, 0.002, -0.056);
+  cuff.castShadow = true;
+  hand.add(cuff);
+
+  // Proportionate plump stylized mitten/paw palm resting atop the rail (y_rail_top = 0.117)
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.072, 16, 14), handMat);
+  palm.scale.set(1.12, 0.48, 1.16);
   palm.castShadow = true;
+  palm.receiveShadow = true;
   hand.add(palm);
 
-  // 3 sculpted finger forms curved gently downward
-  const fingerGeo = new THREE.CapsuleGeometry(0.017, 0.045, 6, 8);
+  // 3 plump sculpted finger digits resting horizontally forward on top of the rail
+  const fingerGeo = new THREE.CapsuleGeometry(0.02, 0.048, 6, 8);
+  fingerGeo.rotateX(Math.PI / 2 + 0.12);
   for (let i = -1; i <= 1; i += 1) {
     const finger = new THREE.Mesh(fingerGeo, handMat);
-    finger.position.set(i * 0.032, -0.008, 0.066);
-    finger.rotation.x = Math.PI * 0.44;
+    finger.position.set(i * 0.041, -0.004, 0.076 - Math.abs(i) * 0.004);
+    finger.rotation.y = i * 0.08;
     finger.castShadow = true;
     hand.add(finger);
   }
 
-  // Thumb
-  const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.017, 0.034, 6, 8), handMat);
-  thumb.position.set(-0.055 * mirrorX, -0.006, 0.02);
-  thumb.rotation.z = 0.7 * mirrorX;
-  thumb.rotation.x = 0.55;
+  // Distinct stylized thumb resting inward on the rail
+  const thumbGeo = new THREE.CapsuleGeometry(0.02, 0.04, 6, 8);
+  thumbGeo.rotateX(Math.PI / 2 + 0.1);
+  const thumb = new THREE.Mesh(thumbGeo, handMat);
+  thumb.position.set(-0.066 * mirrorX, -0.003, 0.024);
+  thumb.rotation.y = -0.46 * mirrorX;
+  thumb.castShadow = true;
   hand.add(thumb);
 
   parent.add(hand);
@@ -63,6 +78,8 @@ function addSculptedHand(
 interface HumanoidTorsoOptions {
   readonly vestColor: number;
   readonly shirtColor: number;
+  readonly sleeveColor?: number;
+  readonly cuffColor?: number;
   readonly handColor: number;
   readonly tieColor?: number;
   readonly leanForward?: number;
@@ -74,7 +91,9 @@ function buildSeatedTorso(opts: HumanoidTorsoOptions): THREE.Group {
 
   const vestMat = createMatteMaterial(opts.vestColor, { roughness: 0.88 });
   const shirtMat = createMatteMaterial(opts.shirtColor, { roughness: 0.86 });
-  const handMat = createMatteMaterial(opts.handColor, { roughness: 0.84 });
+  const sleeveMat = createMatteMaterial(opts.sleeveColor ?? opts.shirtColor, { roughness: 0.87 });
+  const cuffMat = createMatteMaterial(opts.cuffColor ?? opts.shirtColor, { roughness: 0.85 });
+  const handMat = createMatteMaterial(opts.handColor, { roughness: 0.82 });
   const buttonMat = createMatteMaterial(SCENE_COLORS.tableRim, { roughness: 0.76 });
 
   const lean = opts.leanForward ?? 0;
@@ -130,39 +149,54 @@ function buildSeatedTorso(opts: HumanoidTorsoOptions): THREE.Group {
     }
   }
 
-  // Shoulders + curved arms resting forward onto/over the poker table rail
+  // Shoulders + curved arms resting cleanly over onto the top of the table rail (y_rail_top = 0.117)
   const armCurveL = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(-0.27, 0.23, 0.02),
-    new THREE.Vector3(-0.34, 0.1, 0.15),
-    new THREE.Vector3(-0.25, 0.095, 0.34),
+    new THREE.Vector3(-0.27, 0.24, 0.02),
+    new THREE.Vector3(-0.33, 0.185, 0.16),
+    new THREE.Vector3(-0.235, 0.168, 0.33),
   ]);
-  const armMeshL = new THREE.Mesh(new THREE.TubeGeometry(armCurveL, 18, 0.068, 12, false), shirtMat);
+  const armMeshL = new THREE.Mesh(
+    new THREE.TubeGeometry(armCurveL, 18, 0.062, 12, false),
+    sleeveMat,
+  );
   armMeshL.castShadow = true;
   body.add(armMeshL);
 
   const shoulderL = new THREE.Mesh(new THREE.SphereGeometry(0.092, 14, 12), vestMat);
-  shoulderL.position.set(-0.27, 0.23, 0.01);
+  shoulderL.position.set(-0.27, 0.24, 0.01);
   shoulderL.castShadow = true;
   body.add(shoulderL);
 
   const reachR = opts.rightArmReach ?? 0;
   const armCurveR = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0.27, 0.23, 0.02),
-    new THREE.Vector3(0.34, 0.1, 0.15 + reachR * 0.35),
-    new THREE.Vector3(0.23 - reachR * 0.1, 0.092, 0.34 + reachR),
+    new THREE.Vector3(0.27, 0.24, 0.02),
+    new THREE.Vector3(0.33, 0.185, 0.16 + reachR * 0.35),
+    new THREE.Vector3(0.215 - reachR * 0.1, 0.168, 0.33 + reachR),
   ]);
-  const armMeshR = new THREE.Mesh(new THREE.TubeGeometry(armCurveR, 18, 0.068, 12, false), shirtMat);
+  const armMeshR = new THREE.Mesh(
+    new THREE.TubeGeometry(armCurveR, 18, 0.062, 12, false),
+    sleeveMat,
+  );
   armMeshR.castShadow = true;
   body.add(armMeshR);
 
   const shoulderR = new THREE.Mesh(new THREE.SphereGeometry(0.092, 14, 12), vestMat);
-  shoulderR.position.set(0.27, 0.23, 0.01);
+  shoulderR.position.set(0.27, 0.24, 0.01);
   shoulderR.castShadow = true;
   body.add(shoulderR);
 
-  // Hands resting naturally on the table edge
-  addSculptedHand(body, handMat, -0.22, 0.09, 0.39, 0.25, 1);
-  addSculptedHand(body, handMat, 0.2 - reachR * 0.12, 0.088, 0.39 + reachR, -0.25, -1);
+  // Hands resting naturally on top of the table rail (y = 0.166 keeps palm & fingers > 0.117 even when leaning)
+  addSculptedHand(body, handMat, cuffMat, -0.21, 0.166, 0.39, 0.24, 1);
+  addSculptedHand(
+    body,
+    handMat,
+    cuffMat,
+    0.195 - reachR * 0.12,
+    0.166,
+    0.39 + reachR,
+    -0.24,
+    -1,
+  );
 
   return body;
 }
@@ -171,13 +205,13 @@ function createLeanWrapper(group: THREE.Group): {
   readonly leanPivot: THREE.Group;
   readonly bodyContainer: THREE.Group;
 } {
-  // Pivot near the wrists resting on the table rail so leaning forward keeps hands planted
+  // Pivot at the palm/rail contact zone (y = 0.166, z = 0.44) so leaning keeps hands planted on top of the rail
   const leanPivot = new THREE.Group();
-  leanPivot.position.set(0, 0.09, 0.36);
+  leanPivot.position.set(0, 0.166, 0.44);
   group.add(leanPivot);
 
   const bodyContainer = new THREE.Group();
-  bodyContainer.position.set(0, -0.09, -0.36);
+  bodyContainer.position.set(0, -0.166, -0.44);
   leanPivot.add(bodyContainer);
 
   return { leanPivot, bodyContainer };
@@ -200,7 +234,9 @@ function buildCaCharacter(): CaRig {
   const body = buildSeatedTorso({
     vestColor: SCENE_COLORS.caVest,
     shirtColor: SCENE_COLORS.caShirt,
-    handColor: SCENE_COLORS.caBlue,
+    sleeveColor: SCENE_COLORS.caShirt,
+    cuffColor: SCENE_COLORS.caBlueDeep,
+    handColor: SCENE_COLORS.caHand,
   });
   bodyContainer.add(body);
 
@@ -352,7 +388,9 @@ function buildCaoCharacter(): CaoRig {
   const body = buildSeatedTorso({
     vestColor: SCENE_COLORS.caoJacket,
     shirtColor: SCENE_COLORS.caoCream,
-    handColor: SCENE_COLORS.caoOrange,
+    sleeveColor: SCENE_COLORS.caoJacket,
+    cuffColor: SCENE_COLORS.caoCream,
+    handColor: SCENE_COLORS.caoPaw,
     tieColor: SCENE_COLORS.caoTie,
   });
   bodyContainer.add(body);
@@ -527,9 +565,11 @@ function buildNongCharacter(): NongRig {
   const body = buildSeatedTorso({
     vestColor: SCENE_COLORS.nongVest,
     shirtColor: SCENE_COLORS.nongSweater,
-    handColor: SCENE_COLORS.nongRed,
+    sleeveColor: SCENE_COLORS.nongSweater,
+    cuffColor: SCENE_COLORS.nongStripe,
+    handColor: SCENE_COLORS.nongHand,
     leanForward: 0.08,
-    rightArmReach: 0.14,
+    rightArmReach: 0.06,
   });
   bodyContainer.add(body);
 
@@ -719,27 +759,108 @@ function buildHeroPresence(): THREE.Group {
   const hero = new THREE.Group();
   hero.name = 'HeroPresence';
 
-  // Hero sits at the near edge (+Z), represented by subtle resting cuffs/forearms at the corners
-  // of the near rail so the near seat feels grounded without obstructing cards or camera sightlines.
+  // Hero sits at the near edge (+Z), with coherent tapered sleeves, knitted cuffs, and
+  // proportionate hands with readable fingers resting cleanly ON TOP OF the wooden rail
+  // (y_rail_top = 0.117 -> every mesh min.y >= 0.122) without obstructing cards, pot, call or board.
   const sleeveMat = createMatteMaterial(SCENE_COLORS.heroSleeve, { roughness: 0.88 });
   const cuffMat = createMatteMaterial(SCENE_COLORS.heroCuff, { roughness: 0.86 });
-  const skinMat = createMatteMaterial(SCENE_COLORS.heroSkin, { roughness: 0.84 });
+  const skinMat = createMatteMaterial(SCENE_COLORS.heroSkin, { roughness: 0.82 });
+
+  // Shared tapered sleeve lathe profile (rotated along local +Z so sleeve extends from outer rail edge into cuff)
+  const sleeveProfile = [
+    new THREE.Vector2(0.0, -0.2),
+    new THREE.Vector2(0.048, -0.194),
+    new THREE.Vector2(0.056, -0.16),
+    new THREE.Vector2(0.054, -0.09),
+    new THREE.Vector2(0.046, -0.026),
+    new THREE.Vector2(0.0, -0.026),
+  ];
+  const sleeveGeo = new THREE.LatheGeometry(sleeveProfile, 18);
+  sleeveGeo.rotateX(Math.PI / 2);
+
+  // Shared knitted cuff profile seamlessly continuing the sleeve taper into the wrist
+  const cuffProfile = [
+    new THREE.Vector2(0.0, -0.028),
+    new THREE.Vector2(0.046, -0.028),
+    new THREE.Vector2(0.047, -0.016),
+    new THREE.Vector2(0.042, 0.01),
+    new THREE.Vector2(0.037, 0.014),
+    new THREE.Vector2(0.0, 0.014),
+  ];
+  const cuffGeo = new THREE.LatheGeometry(cuffProfile, 18);
+  cuffGeo.rotateX(Math.PI / 2);
+
+  const wristGeo = new THREE.CylinderGeometry(0.036, 0.04, 0.038, 16);
+  wristGeo.rotateX(Math.PI / 2);
+
+  const palmGeo = new THREE.SphereGeometry(0.056, 16, 14);
+  const fingerLengths: readonly number[] = [0.044, 0.051, 0.048, 0.039];
+  const fingerGeos = fingerLengths.map((len) => {
+    const geo = new THREE.CapsuleGeometry(0.012, len, 6, 8);
+    geo.rotateX(Math.PI / 2 + 0.08);
+    return geo;
+  });
+  const thumbGeo = new THREE.CapsuleGeometry(0.013, 0.038, 6, 8);
+  thumbGeo.rotateX(Math.PI / 2 + 0.06);
 
   for (const sx of [-1, 1]) {
-    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.068, 0.28, 8, 12), sleeveMat);
-    forearm.position.set(sx * 0.72, 0.095, 1.36);
-    forearm.rotation.x = Math.PI / 2 - 0.12;
-    forearm.rotation.z = sx * 0.35;
-    forearm.castShadow = true;
-    hero.add(forearm);
+    const armGroup = new THREE.Group();
+    armGroup.name = sx < 0 ? 'HeroArmLeft' : 'HeroArmRight';
+    // Level with the rail plateau (y = 0.122 > 0.117 rail top), extending from the outer rail edge inward
+    armGroup.position.set(sx * 0.54, 0.122, 1.3);
+    armGroup.rotation.y = Math.PI - sx * 0.36;
 
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.064, 0.066, 0.05, 14), cuffMat);
-    cuff.position.set(sx * 0.63, 0.105, 1.2);
-    cuff.rotation.x = Math.PI / 2 - 0.12;
-    cuff.rotation.z = sx * 0.35;
-    hero.add(cuff);
+    const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
+    sleeve.name = 'HeroSleeve';
+    sleeve.scale.set(1.14, 0.6, 1.0);
+    sleeve.position.set(0, 0.036, 0);
+    sleeve.castShadow = true;
+    sleeve.receiveShadow = true;
+    armGroup.add(sleeve);
 
-    addSculptedHand(hero, skinMat, sx * 0.57, 0.095, 1.11, Math.PI - sx * 0.35, -sx);
+    const cuff = new THREE.Mesh(cuffGeo, cuffMat);
+    cuff.name = 'HeroCuff';
+    cuff.scale.set(1.14, 0.6, 1.0);
+    cuff.position.set(0, 0.036, 0);
+    cuff.castShadow = true;
+    armGroup.add(cuff);
+
+    const wrist = new THREE.Mesh(wristGeo, skinMat);
+    wrist.name = 'HeroWrist';
+    wrist.scale.set(1.1, 0.58, 1.0);
+    wrist.position.set(0, 0.033, 0.024);
+    wrist.castShadow = true;
+    armGroup.add(wrist);
+
+    const palm = new THREE.Mesh(palmGeo, skinMat);
+    palm.name = 'HeroPalm';
+    palm.scale.set(1.08, 0.46, 1.15);
+    palm.position.set(0, 0.028, 0.068);
+    palm.castShadow = true;
+    palm.receiveShadow = true;
+    armGroup.add(palm);
+
+    // 4 distinct readable fingers resting on the rail top
+    for (let i = 0; i < 4; i += 1) {
+      const lateral = (-1.5 + i) * sx;
+      const len = fingerLengths[i] ?? 0.044;
+      const finger = new THREE.Mesh(fingerGeos[i], skinMat);
+      finger.name = `HeroFinger${i}`;
+      finger.position.set(lateral * 0.024, 0.019, 0.118 + (len - 0.044) * 0.45);
+      finger.rotation.y = lateral * 0.055;
+      finger.castShadow = true;
+      armGroup.add(finger);
+    }
+
+    // Inner articulated thumb
+    const thumb = new THREE.Mesh(thumbGeo, skinMat);
+    thumb.name = 'HeroThumb';
+    thumb.position.set(-sx * 0.056, 0.02, 0.07);
+    thumb.rotation.y = -sx * 0.48;
+    thumb.castShadow = true;
+    armGroup.add(thumb);
+
+    hero.add(armGroup);
   }
 
   return hero;

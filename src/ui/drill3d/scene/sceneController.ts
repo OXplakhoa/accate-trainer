@@ -180,35 +180,35 @@ export class DrillSceneController {
   }
 
   private setupLights(): void {
-    // Soft bright warm cream room ambient bounce
-    const hemiLight = new THREE.HemisphereLight(0xfff9ee, 0xcab08d, 1.38);
+    // Low warm ambient bounce so outer room walls fall off into a cosy evening vignette
+    const hemiLight = new THREE.HemisphereLight(0xf6e6ce, 0x6b503b, 0.44);
     hemiLight.position.set(0, 6, 0);
     this.scene.add(hemiLight);
 
-    // Warm sunlit key light streaming from the left-front window side
-    const keyLight = new THREE.DirectionalLight(0xfff5e2, 1.55);
-    keyLight.position.set(-4.2, 5.4, 3.2);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(1024, 1024);
-    keyLight.shadow.camera.near = 1;
-    keyLight.shadow.camera.far = 15;
-    keyLight.shadow.camera.left = -4.0;
-    keyLight.shadow.camera.right = 4.0;
-    keyLight.shadow.camera.top = 3.6;
-    keyLight.shadow.camera.bottom = -3.6;
-    keyLight.shadow.bias = -0.0007;
-    keyLight.shadow.normalBias = 0.025;
-    this.scene.add(keyLight);
+    // Warm overhead pendant lamp spotlight forming a distinct bright pool on the table felt
+    // (the ONLY shadow-casting light, 1024x1024 map for mobile-friendly performance)
+    const tableSpot = new THREE.SpotLight(0xfff0d2, 9.6, 9.5, Math.PI * 0.35, 0.84, 1.5);
+    tableSpot.position.set(0, 2.82, -0.12);
+    tableSpot.target.position.set(0, 0, -0.12);
+    tableSpot.castShadow = true;
+    tableSpot.shadow.mapSize.set(1024, 1024);
+    tableSpot.shadow.camera.near = 0.6;
+    tableSpot.shadow.camera.far = 7.5;
+    tableSpot.shadow.bias = -0.0005;
+    tableSpot.shadow.normalBias = 0.022;
+    this.scene.add(tableSpot);
+    this.scene.add(tableSpot.target);
 
-    // Gentle right-side fill light so Nóng's kettle head & Cáo's face never go muddy
-    const fillLight = new THREE.DirectionalLight(0xf6ead7, 0.62);
-    fillLight.position.set(4.5, 3.0, 2.2);
-    this.scene.add(fillLight);
+    // Localized short-range front-table fill so Cá, Cáo and Nóng faces stay crisp and readable
+    // without illuminating the far room walls (distance = 5.1 cuts off before walls at z = -4.4)
+    const characterFill = new THREE.PointLight(0xffe8c6, 1.48, 5.1, 1.6);
+    characterFill.position.set(0, 1.42, 1.12);
+    this.scene.add(characterFill);
 
-    // Warm overhead table pendant pool accent
-    const tablePool = new THREE.PointLight(0xffefc9, 1.3, 8.5, 1.6);
-    tablePool.position.set(0, 2.55, -0.1);
-    this.scene.add(tablePool);
+    // Subtle warm window cross-rim accent for 3D form separation
+    const rimFill = new THREE.DirectionalLight(0xffe7c4, 0.26);
+    rimFill.position.set(-3.8, 3.2, 1.8);
+    this.scene.add(rimFill);
   }
 
   private handleContextLost = (event: Event): void => {
