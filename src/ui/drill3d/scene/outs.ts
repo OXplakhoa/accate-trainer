@@ -1,4 +1,4 @@
-import type { DemoSpot } from '../contract';
+import type { SceneTableSnapshot } from '../contract';
 
 export type CardSuit = '♥' | '♦' | '♣' | '♠';
 
@@ -34,6 +34,17 @@ const SUIT_NAMES_VI: Record<CardSuit, string> = {
   '♠': 'bích',
 };
 
+const ASCII_SUIT_MAP: Record<string, CardSuit> = {
+  h: '♥',
+  H: '♥',
+  d: '♦',
+  D: '♦',
+  c: '♣',
+  C: '♣',
+  s: '♠',
+  S: '♠',
+};
+
 const RANK_NAMES_VI: Record<string, string> = {
   A: 'Át',
   K: 'K',
@@ -56,8 +67,9 @@ export function parseCard(card: string): ParsedCard {
   const suit: CardSuit =
     lastChar === '♥' || lastChar === '♦' || lastChar === '♣' || lastChar === '♠'
       ? lastChar
-      : '♠';
-  const rank = trimmed.slice(0, Math.max(1, trimmed.length - 1)) || '?';
+      : (ASCII_SUIT_MAP[lastChar] ?? '♠');
+  const rawRank = trimmed.slice(0, Math.max(1, trimmed.length - 1)) || '?';
+  const rank = rawRank === 'T' || rawRank === 't' ? '10' : rawRank;
   const rankLabel = RANK_NAMES_VI[rank] ?? rank;
   return {
     raw: trimmed,
@@ -71,10 +83,15 @@ export function parseCard(card: string): ParsedCard {
 
 /**
  * Returns every remaining unseen heart card from a standard 52-card deck
- * that has NOT appeared in Hero's hole cards or the Turn board.
+ * that has NOT appeared in Hero's hole cards or the board.
  */
-export function getUnseenHearts(spot: DemoSpot): readonly string[] {
-  const seen = new Set<string>([...spot.heroCards, ...spot.board]);
+export function getUnseenHearts(spot: SceneTableSnapshot): readonly string[] {
+  const seen = new Set<string>(
+    [...spot.heroCards, ...spot.board].map((card) => {
+      const parsed = parseCard(card);
+      return `${parsed.rank}${parsed.suit}`;
+    }),
+  );
   const unseen: string[] = [];
   for (const rank of HEART_RANKS) {
     const candidate = `${rank}♥`;
@@ -93,11 +110,16 @@ export interface ChipDenomSpec {
 }
 
 const CHIP_DENOMS: readonly ChipDenomSpec[] = [
+  { value: 500, bodyHex: '#6F4C7A', stripeHex: '#F7EFE2', accentHex: '#E5D4EC' },
+  { value: 100, bodyHex: '#3B3635', stripeHex: '#E8C596', accentHex: '#D8C7B4' },
   { value: 50, bodyHex: '#C95849', stripeHex: '#F5EAD8', accentHex: '#E9C890' },
   { value: 25, bodyHex: '#2E6A5E', stripeHex: '#F3E8D4', accentHex: '#A7D3C7' },
   { value: 10, bodyHex: '#4F9DD3', stripeHex: '#F7EFE2', accentHex: '#D8ECFA' },
   { value: 5, bodyHex: '#D89A46', stripeHex: '#533C31', accentHex: '#F7E7CA' },
+  { value: 1, bodyHex: '#E8DEC9', stripeHex: '#7A5B47', accentHex: '#CBB89D' },
 ];
+
+const MAX_CHIPS_PER_STACK = 10;
 
 export interface ChipStackItem {
   readonly denom: ChipDenomSpec;
@@ -106,30 +128,40 @@ export interface ChipStackItem {
 
 export function buildChipStacksForAmount(amount: number): readonly ChipStackItem[] {
   let remaining = Math.max(0, Math.round(amount));
+  if (remaining <= 0) {
+    return [];
+  }
+
+  // Keep exact tactile Drill breakdown for 100 (2x50) and 50 (1x25 + 2x10 + 1x5)
+  if (remaining === 100) {
+    const fifty = CHIP_DENOMS.find((d) => d.value === 50);
+    if (fifty) {
+      return [{ denom: fifty, count: 2 }];
+    }
+  }
+  if (remaining === 50) {
+    const twentyFive = CHIP_DENOMS.find((d) => d.value === 25);
+    const ten = CHIP_DENOMS.find((d) => d.value === 10);
+    const five = CHIP_DENOMS.find((d) => d.value === 5);
+    if (twentyFive && ten && five) {
+      return [
+        { denom: twentyFive, count: 1 },
+        { denom: ten, count: 2 },
+        { denom: five, count: 1 },
+      ];
+    }
+  }
+
   const stacks: ChipStackItem[] = [];
 
   for (const denom of CHIP_DENOMS) {
     if (remaining <= 0) {
       break;
     }
-    // Use 25s or 10s so stacks feel tactile and visually rich (e.g. 50 -> 2x25 or 1x50 + 5x10)
-    const count = Math.floor(remaining / denom.value);
-    if (count > 0) {
-      stacks.push({ denom, count });
-      remaining -= count * denom.value;
-    }
-  }
-
-  // Split very sparse 1-chip stacks (like exact 50) into tactile multi-chip stacks
-  if (stacks.length === 1 && stacks[0] && stacks[0].count === 1 && stacks[0].denom.value === 50) {
-    const twentyFive = CHIP_DENOMS[1];
-    const ten = CHIP_DENOMS[2];
-    if (twentyFive && ten) {
-      return [
-        { denom: twentyFive, count: 1 },
-        { denom: ten, count: 2 },
-        { denom: CHIP_DENOMS[3] ?? ten, count: 1 },
-      ];
+    const rawCount = Math.floor(remaining / denom.value);
+    if (rawCount > 0) {
+      stacks.push({ denom, count: Math.min(MAX_CHIPS_PER_STACK, rawCount) });
+      remaining -= rawCount * denom.value;
     }
   }
 

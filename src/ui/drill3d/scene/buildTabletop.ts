@@ -1,7 +1,16 @@
 import * as THREE from 'three';
-import type { DemoSpot, LessonHighlight } from '../contract';
+import type { LessonHighlight, SceneRival, SceneTableSnapshot } from '../contract';
 import { buildChipStacksForAmount, getUnseenHearts, parseCard } from './outs';
 import { createMatteMaterial, disposeObject3DResources, SCENE_COLORS } from './palette';
+import {
+  ALL_SCENE_RIVALS,
+  getEffectiveHighlight,
+  getOccupiedRivals,
+  isLiveSnapshot,
+  isRivalCardsVisible,
+  shouldShowOuts,
+  shouldShowRiverPlaceholder,
+} from './snapshot';
 import {
   createCardBackTexture,
   createCardFaceTexture,
@@ -12,7 +21,7 @@ import {
 
 export interface TabletopRig {
   readonly root: THREE.Group;
-  readonly updateSpot: (spot: DemoSpot) => void;
+  readonly updateSpot: (spot: SceneTableSnapshot) => void;
   readonly updateHighlight: (highlight: LessonHighlight) => void;
 }
 
@@ -21,6 +30,8 @@ const CARD_H = 0.43;
 const CARD_THICK = 0.008;
 const CHIP_RADIUS = 0.072;
 const CHIP_HEIGHT = 0.022;
+const BOARD_XS: readonly number[] = [-0.74, -0.36, 0.02, 0.4, 0.78];
+const BOARD_Z = -0.22;
 
 function createCardMesh(
   frontTex: THREE.Texture,
@@ -166,24 +177,41 @@ function buildChipStackMesh(
   return stack;
 }
 
-export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
+export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
   const root = new THREE.Group();
   root.name = 'Tabletop';
 
   const cardBackTex = createCardBackTexture();
 
-  // Static face-down rival hole cards (never revealed per spec!)
-  const rivalCardPlacements: readonly { x: number; z: number; rotY: number }[] = [
+  // Static face-down rival hole cards (never revealed at the 3D layer; hidden when seat is unoccupied or between hands)
+  const rivalCardPlacements: readonly {
+    readonly id: SceneRival;
+    readonly x: number;
+    readonly z: number;
+    readonly rotY: number;
+  }[] = [
     // Cá (left-far)
-    { x: -1.18, z: -0.68, rotY: 0.92 },
+    { id: 'ca', x: -1.18, z: -0.68, rotY: 0.92 },
     // Cáo (center-far)
-    { x: 0.0, z: -0.96, rotY: 0.0 },
+    { id: 'cao', x: 0.0, z: -0.96, rotY: 0.0 },
     // Nóng (right-far)
-    { x: 1.18, z: -0.68, rotY: -0.92 },
+    { id: 'nong', x: 1.18, z: -0.68, rotY: -0.92 },
   ];
 
+  const rivalCardGroups: Record<SceneRival, THREE.Group> = {
+    ca: new THREE.Group(),
+    cao: new THREE.Group(),
+    nong: new THREE.Group(),
+  };
+
+  const rivalTurnRings: Record<SceneRival, THREE.Mesh> = {
+    ca: createHighlightRing(0.22, 0.27, SCENE_COLORS.highlightPot, 1.18, 0.88),
+    cao: createHighlightRing(0.22, 0.27, SCENE_COLORS.highlightPot, 1.18, 0.88),
+    nong: createHighlightRing(0.22, 0.27, SCENE_COLORS.highlightPot, 1.18, 0.88),
+  };
+
   for (const place of rivalCardPlacements) {
-    const pair = new THREE.Group();
+    const pair = rivalCardGroups[place.id];
     pair.position.set(place.x, 0.005, place.z);
     pair.rotation.y = place.rotY;
 
@@ -195,9 +223,16 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
       pair.add(card);
     }
     root.add(pair);
+
+    const turnRing = rivalTurnRings[place.id];
+    turnRing.position.set(place.x, 0.0055, place.z);
+    turnRing.rotation.y = place.rotY;
+    root.add(turnRing);
   }
 
-  // Decorative personal chip stacks beside each seat
+  // Decorative fixture seat chip stacks + dealer puck (shown in Drill fixture mode only; hidden in live mode)
+  const fixtureSeatPropsGroup = new THREE.Group();
+  fixtureSeatPropsGroup.name = 'FixtureSeatProps';
   const seatStacks: readonly {
     x: number;
     z: number;
@@ -224,21 +259,22 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
   for (const s of seatStacks) {
     const edgeTex = createChipEdgeTexture(s.body, s.stripe);
     const topTex = createChipTopTexture(s.body, s.stripe, s.accent, s.label);
-    root.add(buildChipStackMesh(s.count, edgeTex, topTex, s.x, s.z));
+    fixtureSeatPropsGroup.add(buildChipStackMesh(s.count, edgeTex, topTex, s.x, s.z));
   }
 
-  // Dealer button puck near Cáo/Cá
+  // Dealer button puck near Cáo/Cá (fixture mode only)
   const dealerBtn = new THREE.Mesh(
     new THREE.CylinderGeometry(0.085, 0.088, 0.024, 24),
     createMatteMaterial(SCENE_COLORS.ivory, { roughness: 0.72 }),
   );
   dealerBtn.position.set(-0.88, 0.013, -0.58);
   dealerBtn.castShadow = true;
-  root.add(dealerBtn);
+  fixtureSeatPropsGroup.add(dealerBtn);
+  root.add(fixtureSeatPropsGroup);
 
-  // Subtle empty River slot marker on the felt (5th board card position)
-  const riverSlotX = 0.78;
-  const riverSlotZ = -0.22;
+  // Subtle empty River slot marker on the felt (5th board card position: BOARD_XS[4] = 0.78)
+  const riverSlotX = BOARD_XS[4] ?? 0.78;
+  const riverSlotZ = BOARD_Z;
   const riverSlotTex = createRiverSlotTexture();
   const riverSlot = new THREE.Mesh(
     new THREE.PlaneGeometry(CARD_W, CARD_H),
@@ -276,7 +312,7 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
   riverOutsRing.position.set(riverSlotX, 0.006, riverSlotZ);
   root.add(riverOutsRing);
 
-  // Dynamic groups rebuilt when spot changes
+  // Dynamic groups rebuilt when spot cards/amounts change
   const boardGroup = new THREE.Group();
   root.add(boardGroup);
 
@@ -298,7 +334,8 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
 
   let seenHeartFrames: THREE.Mesh[] = [];
   let currentHighlight: LessonHighlight = null;
-  let currentSpotKey = '';
+  let currentSpot: SceneTableSnapshot = initialSpot;
+  let currentCardsAndChipsKey = '';
 
   const sharedTextures = new Set<THREE.Texture>([cardBackTex]);
 
@@ -311,29 +348,46 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
 
   const applyHighlightState = (highlight: LessonHighlight) => {
     currentHighlight = highlight;
+    const effective = getEffectiveHighlight(currentSpot, highlight);
+    const showOuts = shouldShowOuts(currentSpot, highlight);
 
-    potRing.visible = highlight === 'pot' || highlight === 'total';
-    callRing.visible = highlight === 'call' || highlight === 'total';
-    totalRing.visible = highlight === 'total';
-    riverOutsRing.visible = highlight === 'outs';
-    outsFanGroup.visible = highlight === 'outs';
+    potRing.visible = (effective === 'pot' || effective === 'total') && currentSpot.pot > 0;
+    callRing.visible = (effective === 'call' || effective === 'total') && currentSpot.call > 0;
+    totalRing.visible = effective === 'total';
+    riverOutsRing.visible = showOuts;
+    outsFanGroup.visible = showOuts;
 
     // Subtle elevation lift on highlighted chip clusters for instant tactile feedback
-    potChipsGroup.position.y = highlight === 'pot' || highlight === 'total' ? 0.032 : 0;
-    callChipsGroup.position.y = highlight === 'call' || highlight === 'total' ? 0.036 : 0;
+    potChipsGroup.position.y = effective === 'pot' || effective === 'total' ? 0.032 : 0;
+    callChipsGroup.position.y = effective === 'call' || effective === 'total' ? 0.036 : 0;
 
-    // Emphasize the 4 seen heart cards slightly when showing the flush draw outs
+    // Emphasize the seen heart cards slightly when showing the flush draw outs in Drill mode
     for (const frame of seenHeartFrames) {
-      frame.visible = highlight === 'outs';
+      frame.visible = showOuts;
     }
   };
 
-  const updateSpot = (spot: DemoSpot) => {
-    const key = `${spot.pot}:${spot.call}:${spot.heroCards.join(',')}:${spot.board.join(',')}`;
-    if (key === currentSpotKey) {
+  const updateSpot = (spot: SceneTableSnapshot) => {
+    currentSpot = spot;
+    const isLive = isLiveSnapshot(spot);
+    const occupiedSet = new Set<SceneRival>(getOccupiedRivals(spot));
+
+    // Toggle seat props, rival face-down cards, turn indicator, and River placeholder cheaply
+    fixtureSeatPropsGroup.visible = !isLive;
+    riverSlot.visible = shouldShowRiverPlaceholder(spot);
+
+    for (const rival of ALL_SCENE_RIVALS) {
+      rivalCardGroups[rival].visible = isRivalCardsVisible(spot, rival);
+      rivalTurnRings[rival].visible =
+        isLive && spot.live?.activeRival === rival && occupiedSet.has(rival);
+    }
+
+    const cardsAndChipsKey = `${isLive ? 'L' : 'D'}:${spot.pot}:${spot.call}:${spot.heroCards.join(',')}:${spot.board.join(',')}`;
+    if (cardsAndChipsKey === currentCardsAndChipsKey) {
+      applyHighlightState(currentHighlight);
       return;
     }
-    currentSpotKey = key;
+    currentCardsAndChipsKey = cardsAndChipsKey;
 
     clearGroup(boardGroup);
     clearGroup(heroCardsGroup);
@@ -342,29 +396,28 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
     clearGroup(outsFanGroup);
     seenHeartFrames = [];
 
-    // 1. 4 Community Cards (Turn board)
-    const boardXs = [-0.74, -0.36, 0.02, 0.4];
-    spot.board.forEach((cardStr, idx) => {
-      const bx = boardXs[idx] ?? 0;
+    // 1. Community Cards (0-5 cards; index 4 occupies the exact River slot at x = 0.78)
+    spot.board.slice(0, 5).forEach((cardStr, idx) => {
+      const bx = BOARD_XS[idx] ?? riverSlotX;
       const faceTex = createCardFaceTexture(cardStr);
       const cardMesh = createCardMesh(faceTex, cardBackTex);
-      cardMesh.position.set(bx, 0.008, -0.22);
+      cardMesh.position.set(bx, 0.008, BOARD_Z);
       boardGroup.add(cardMesh);
 
-      if (parseCard(cardStr).isHeart) {
+      if (!isLive && parseCard(cardStr).isHeart) {
         const frame = createHeartOutlineFrame();
-        frame.position.set(bx, 0.005, -0.22);
+        frame.position.set(bx, 0.005, BOARD_Z);
         boardGroup.add(frame);
         seenHeartFrames.push(frame);
       }
     });
 
-    // 2. 2 Hero Hole Cards angled cleanly at the near edge
+    // 2. Hero Hole Cards (0-2 cards; empty when Hero has no cards between hands or when absent)
     const heroOffsets: readonly { x: number; z: number; rotY: number }[] = [
       { x: -0.18, z: 0.88, rotY: 0.07 },
       { x: 0.18, z: 0.88, rotY: -0.07 },
     ];
-    spot.heroCards.forEach((cardStr, idx) => {
+    spot.heroCards.slice(0, 2).forEach((cardStr, idx) => {
       const offset = heroOffsets[idx] ?? { x: 0, z: 0.88, rotY: 0 };
       const faceTex = createCardFaceTexture(cardStr);
       const cardHolder = new THREE.Group();
@@ -377,7 +430,7 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
       cardMesh.scale.set(1.06, 1, 1.06);
       cardHolder.add(cardMesh);
 
-      if (parseCard(cardStr).isHeart) {
+      if (!isLive && parseCard(cardStr).isHeart) {
         const frame = createHeartOutlineFrame();
         frame.scale.set(1.08, 1, 1.08);
         frame.position.y = -0.004;
@@ -388,49 +441,71 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
       heroCardsGroup.add(cardHolder);
     });
 
-    // 3. Pot Chip Cluster (total pot already in the middle, including opponent's bet)
-    const potPreBet = Math.max(0, spot.pot - spot.call);
-    const potCoreStacks = buildChipStacksForAmount(potPreBet);
-    const oppBetStacks = buildChipStacksForAmount(spot.call);
+    // 3. Pot Chip Cluster (illustrative chips matching actual pot; empty when pot <= 0)
+    if (isLive) {
+      const potStacks = buildChipStacksForAmount(spot.pot).slice(0, 5);
+      const livePotPositions: readonly [number, number][] = [
+        [-0.14, -0.02],
+        [0.04, -0.09],
+        [0.18, 0.02],
+        [-0.04, 0.12],
+        [0.12, 0.13],
+      ];
+      potStacks.forEach((item, i) => {
+        const pos = livePotPositions[i % livePotPositions.length] ?? [0, 0];
+        const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
+        const topTex = createChipTopTexture(
+          item.denom.bodyHex,
+          item.denom.stripeHex,
+          item.denom.accentHex,
+          String(item.denom.value),
+        );
+        potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
+      });
+    } else {
+      const potPreBet = Math.max(0, spot.pot - spot.call);
+      const potCoreStacks = buildChipStacksForAmount(potPreBet);
+      const oppBetStacks = buildChipStacksForAmount(spot.call);
 
-    const corePositions: readonly [number, number][] = [
-      [-0.18, -0.04],
-      [-0.02, -0.12],
-      [-0.14, 0.11],
-      [0.03, 0.06],
-    ];
-    potCoreStacks.forEach((item, i) => {
-      const pos = corePositions[i % corePositions.length] ?? [0, 0];
-      const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
-      const topTex = createChipTopTexture(
-        item.denom.bodyHex,
-        item.denom.stripeHex,
-        item.denom.accentHex,
-        String(item.denom.value),
-      );
-      potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
-    });
+      const corePositions: readonly [number, number][] = [
+        [-0.18, -0.04],
+        [-0.02, -0.12],
+        [-0.14, 0.11],
+        [0.03, 0.06],
+      ];
+      potCoreStacks.forEach((item, i) => {
+        const pos = corePositions[i % corePositions.length] ?? [0, 0];
+        const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
+        const topTex = createChipTopTexture(
+          item.denom.bodyHex,
+          item.denom.stripeHex,
+          item.denom.accentHex,
+          String(item.denom.value),
+        );
+        potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
+      });
 
-    // Opponent's active bet nestled on the right edge of the pot circle (part of displayed pot)
-    const oppBetPositions: readonly [number, number][] = [
-      [0.2, -0.03],
-      [0.24, 0.1],
-      [0.14, 0.13],
-    ];
-    oppBetStacks.forEach((item, i) => {
-      const pos = oppBetPositions[i % oppBetPositions.length] ?? [0.2, 0];
-      const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
-      const topTex = createChipTopTexture(
-        item.denom.bodyHex,
-        item.denom.stripeHex,
-        item.denom.accentHex,
-        String(item.denom.value),
-      );
-      potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
-    });
+      // Opponent's active bet nestled on the right edge of the pot circle (part of displayed pot)
+      const oppBetPositions: readonly [number, number][] = [
+        [0.2, -0.03],
+        [0.24, 0.1],
+        [0.14, 0.13],
+      ];
+      oppBetStacks.forEach((item, i) => {
+        const pos = oppBetPositions[i % oppBetPositions.length] ?? [0.2, 0];
+        const edgeTex = createChipEdgeTexture(item.denom.bodyHex, item.denom.stripeHex);
+        const topTex = createChipTopTexture(
+          item.denom.bodyHex,
+          item.denom.stripeHex,
+          item.denom.accentHex,
+          String(item.denom.value),
+        );
+        potChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
+      });
+    }
 
-    // 4. Hero's Required Call Chip Stack (distinct zone toward Hero)
-    const callStacks = buildChipStacksForAmount(spot.call);
+    // 4. Hero's Required Call Chip Stack (distinct zone toward Hero; empty when call <= 0)
+    const callStacks = buildChipStacksForAmount(spot.call).slice(0, 3);
     const callOffsets: readonly [number, number][] = [
       [-0.08, 0.0],
       [0.08, -0.03],
@@ -448,25 +523,27 @@ export function buildTabletop(initialSpot: DemoSpot): TabletopRig {
       callChipsGroup.add(buildChipStackMesh(item.count, edgeTex, topTex, pos[0], pos[1]));
     });
 
-    // 5. Ghostly Unseen Heart Outs Fan (hovering ABOVE the open River slot — never flat/dealt!)
-    const unseenHearts = getUnseenHearts(spot);
-    const total = unseenHearts.length;
-    unseenHearts.forEach((heartCard, idx) => {
-      const norm = total > 1 ? idx / (total - 1) - 0.5 : 0; // -0.5 .. +0.5
-      const faceTex = createCardFaceTexture(heartCard, { ghost: true });
-      const ghostCard = createCardMesh(faceTex, cardBackTex, { ghost: true, opacity: 0.86 });
-      ghostCard.scale.set(0.62, 0.6, 0.62);
-      // ZYX order: tilt upright facing the player first (X), then fan cleanly in the card plane (Z)
-      ghostCard.rotation.order = 'ZYX';
-      ghostCard.rotation.x = Math.PI / 2 - 0.34;
-      ghostCard.rotation.z = -norm * 0.58;
-      ghostCard.position.set(
-        norm * 0.64,
-        0.11 + (1 - Math.abs(norm * 2)) * 0.08,
-        idx * 0.008 - 0.04,
-      );
-      outsFanGroup.add(ghostCard);
-    });
+    // 5. Ghostly Unseen Heart Outs Fan (Drill mode only — live mode shows no assumption ghost outs)
+    if (!isLive) {
+      const unseenHearts = getUnseenHearts(spot);
+      const total = unseenHearts.length;
+      unseenHearts.forEach((heartCard, idx) => {
+        const norm = total > 1 ? idx / (total - 1) - 0.5 : 0; // -0.5 .. +0.5
+        const faceTex = createCardFaceTexture(heartCard, { ghost: true });
+        const ghostCard = createCardMesh(faceTex, cardBackTex, { ghost: true, opacity: 0.86 });
+        ghostCard.scale.set(0.62, 0.6, 0.62);
+        // ZYX order: tilt upright facing the player first (X), then fan cleanly in the card plane (Z)
+        ghostCard.rotation.order = 'ZYX';
+        ghostCard.rotation.x = Math.PI / 2 - 0.34;
+        ghostCard.rotation.z = -norm * 0.58;
+        ghostCard.position.set(
+          norm * 0.64,
+          0.11 + (1 - Math.abs(norm * 2)) * 0.08,
+          idx * 0.008 - 0.04,
+        );
+        outsFanGroup.add(ghostCard);
+      });
+    }
 
     applyHighlightState(currentHighlight);
   };
