@@ -38,7 +38,7 @@ describe('PrototypeSound', () => {
     expect(() => new PrototypeSound().unlockFromUserGesture()).not.toThrow();
   });
 
-  it('stops active and scheduled voices on mute, hidden and dispose, and suppresses playback', () => {
+  it('stops active and scheduled voices on mute, hidden and dispose, and suppresses playback', async () => {
     const env = audioEnvironment();
     const sound = new PrototypeSound();
     sound.unlockFromUserGesture();
@@ -60,7 +60,9 @@ describe('PrototypeSound', () => {
     sound.play('tick');
     expect(env.voices).toHaveLength(count);
     env.setHidden(false);
+    await Promise.resolve();
     sound.play('expired');
+    expect(env.voices.length).toBeGreaterThan(count);
     const pending = env.voices.at(-1)!;
     sound.dispose();
     expect(pending.stop).toHaveBeenCalledTimes(2);

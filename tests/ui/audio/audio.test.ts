@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { emptyChips } from '../../../src/engine/chips';
-import type { HandTimelineEvent } from '../../../src/engine/handTypes';
-import { createRng } from '../../../src/engine/rng';
+import { createRng, emptyChips, type HandTimelineEvent } from '../../../src/engine';
 import { AudioCore, MAX_AUDIO_VOICES } from '../../../src/ui/audio/AudioCore';
 import { TableSounds } from '../../../src/ui/audio/TableSounds';
 import { DrillSoundController } from '../../../src/ui/drill/sound';
@@ -28,6 +26,14 @@ function action(
     newCurrentBet: 0,
     fromOutOfTurn: false,
   };
+}
+
+function deferredOperation() {
+  let finish!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  return { promise, finish };
 }
 
 afterEach(() => {
@@ -73,7 +79,7 @@ describe('shared audio graph', () => {
     expect(env.listeners.get('visibilitychange')?.size).toBe(0);
   });
 
-  it('maps channel sliders, immediately clears scheduled audio on mute or hide, and disables zero channels', () => {
+  it('maps channel sliders, clears scheduled audio on mute or hide, and resumes without replaying it', async () => {
     const env = audioEnvironment();
     const audio = new AudioCore(settings, seed);
     const sounds = new TableSounds(audio, seed);
@@ -106,13 +112,118 @@ describe('shared audio graph', () => {
     expect(env.liveVoices()).toHaveLength(5);
     env.setHidden(true);
     expect(master!.value).toBe(0);
+    expect(env.context.suspend).toHaveBeenCalledOnce();
+    expect(env.context.state).toBe('suspended');
     expect(env.liveVoices()).toHaveLength(0);
     sounds.playChip(100);
     expect(env.voices).toHaveLength(11);
+    await Promise.resolve();
     env.setHidden(false);
+    expect(env.context.resume).toHaveBeenCalledOnce();
+    expect(env.context.state).toBe('running');
+    await Promise.resolve();
+    expect(env.voices).toHaveLength(11);
     sounds.playChip(100);
     expect(master!.value).toBe(1);
     expect(env.liveVoices()).toHaveLength(4);
+    audio.dispose();
+  });
+
+  it('silences buses with non-finite volume levels', () => {
+    const env = audioEnvironment();
+    const audio = new AudioCore(settings, seed);
+    const sounds = new TableSounds(audio, seed);
+    audio.unlockFromUserGesture();
+    sounds.playChip(5);
+    expect(env.liveVoices()).toHaveLength(4);
+
+    audio.updateSettings({ ...settings, chips: NaN, cards: Infinity, timer: -Infinity });
+    expect(env.gains.slice(2, 6).map(({ gain }) => gain.value)).toEqual([0, 0, 0, 0]);
+    expect(env.liveVoices()).toHaveLength(0);
+    sounds.playChip(100);
+    sounds.playCardDeal();
+    sounds.playTimerTick(true);
+    sounds.playOutOfTurn();
+    expect(env.voices).toHaveLength(4);
+    audio.dispose();
+  });
+
+  it('queues only the first eight cues while gesture resume is pending', async () => {
+    const env = audioEnvironment({ state: 'suspended' });
+    const resume = deferredOperation();
+    env.context.resume.mockReturnValueOnce(resume.promise);
+    const audio = new AudioCore(settings, seed);
+    const sounds = new TableSounds(audio, seed);
+    audio.unlockFromUserGesture();
+    for (let i = 0; i < 8; i++) sounds.playTimerTick(false);
+    sounds.playTimerTick(true);
+    sounds.playOutOfTurn();
+    expect(env.voices).toHaveLength(0);
+
+    env.context.state = 'running';
+    resume.finish();
+    await resume.promise;
+    expect(env.oscillators).toHaveLength(8);
+    expect(
+      env.oscillators.every((osc) => osc.frequency.setValueAtTime.mock.calls[0]?.[0] === 780),
+    ).toBe(true);
+    audio.dispose();
+  });
+
+  it('waits for a pending suspend, discards pre-hide cues, and retries a failed visibility resume on gesture', async () => {
+    const env = audioEnvironment({ state: 'suspended' });
+    const firstResume = deferredOperation();
+    const suspend = deferredOperation();
+    env.context.resume
+      .mockReturnValueOnce(firstResume.promise)
+      .mockRejectedValueOnce(new Error('blocked'));
+    env.context.suspend.mockReturnValueOnce(suspend.promise);
+    const audio = new AudioCore(settings, seed);
+    const sounds = new TableSounds(audio, seed);
+    audio.unlockFromUserGesture();
+    sounds.playTimerTick(false);
+    env.setHidden(true);
+    env.setHidden(false);
+    sounds.playTimerTick(false);
+    expect(env.context.suspend).toHaveBeenCalledOnce();
+    expect(env.context.resume).toHaveBeenCalledOnce();
+
+    suspend.finish();
+    await suspend.promise;
+    expect(env.context.resume).toHaveBeenCalledTimes(2);
+    sounds.playTimerTick(false);
+    await Promise.resolve();
+    expect(env.context.state).toBe('suspended');
+    expect(env.voices).toHaveLength(0);
+
+    expect(audio.unlockFromUserGesture()).toBe(true);
+    firstResume.finish();
+    await firstResume.promise;
+    expect(env.context.resume).toHaveBeenCalledTimes(3);
+    expect(env.voices).toHaveLength(0);
+    sounds.playTimerTick(true);
+    expect(env.oscillators).toHaveLength(1);
+    audio.dispose();
+  });
+
+  it('ignores an old suspend completion after disposal and re-unlock', async () => {
+    const env = audioEnvironment();
+    const suspend = deferredOperation();
+    env.context.suspend.mockReturnValueOnce(suspend.promise);
+    const audio = new AudioCore(settings, seed);
+    audio.unlockFromUserGesture();
+    env.setHidden(true);
+    env.setHidden(false);
+    audio.dispose();
+    expect(env.context.close).toHaveBeenCalledOnce();
+    expect(env.listeners.get('visibilitychange')?.size).toBe(0);
+    expect(audio.unlockFromUserGesture()).toBe(true);
+
+    suspend.finish();
+    await suspend.promise;
+    expect(env.context.resume).not.toHaveBeenCalled();
+    expect(env.contexts[1]!.state).toBe('running');
+    expect(env.listeners.get('visibilitychange')?.size).toBe(1);
     audio.dispose();
   });
 
@@ -133,7 +244,7 @@ describe('shared audio graph', () => {
     audio.dispose();
   });
 
-  it('schedules distinct soft chords ahead and clears their timer and voices on mute, hide, zero and dispose', () => {
+  it('schedules distinct soft chords ahead and clears their timer and voices on mute, hide, zero and dispose', async () => {
     const timer = mockBrowserTimer('interval');
     const env = audioEnvironment();
     const audio = new AudioCore({ ...settings, music: 40 }, seed);
@@ -164,6 +275,10 @@ describe('shared audio graph', () => {
     env.setHidden(true);
     expect(timer.count()).toBe(0);
     expect(env.liveVoices()).toHaveLength(0);
+    const beforeShow = env.oscillators.length;
+    timer.fire();
+    expect(env.oscillators).toHaveLength(beforeShow);
+    await Promise.resolve();
     env.setHidden(false);
     expect(env.liveVoices()).toHaveLength(4);
     audio.updateSettings(settings);
@@ -239,6 +354,24 @@ describe('table sound recipes', () => {
     expect(env.liveVoices().length).toBeLessThanOrEqual(MAX_AUDIO_VOICES);
     sounds.playTimerTick(true);
     expect(env.oscillators.at(-1)!.frequency.setValueAtTime.mock.calls[0]![0]).toBe(1050);
+    audio.dispose();
+  });
+
+  it('keeps timer and UI voices available after saturating the chips bus', () => {
+    const env = audioEnvironment();
+    const audio = new AudioCore(settings, seed);
+    const sounds = new TableSounds(audio, seed);
+    audio.unlockFromUserGesture();
+    for (let i = 0; i < 20; i++) sounds.playChip(5);
+    expect(env.liveVoices()).toHaveLength(MAX_AUDIO_VOICES - 8);
+
+    sounds.playTimerTick(true);
+    expect(env.panners.at(-1)!.connect).toHaveBeenCalledWith(env.gains[4]);
+    sounds.playOutOfTurn();
+    for (const panner of env.panners.slice(-2)) {
+      expect(panner.connect).toHaveBeenCalledWith(env.gains[5]);
+    }
+    expect(env.liveVoices()).toHaveLength(MAX_AUDIO_VOICES - 5);
     audio.dispose();
   });
 });
@@ -322,6 +455,61 @@ describe('shared audio adapters', () => {
     audio.dispose();
   });
 
+  it('maps fold, chip exchange, and an uncalled refund while payout pending stays silent', () => {
+    const env = audioEnvironment();
+    const audio = new SandboxAudioEngine(settings);
+    audio.setSeatPan({ ca: -0.7, nong: 0.8 });
+    audio.unlockFromUserGesture();
+    audio.playTimelineEventOnce('fold', action({ type: 'fold' }));
+    expect(env.bufferSources).toHaveLength(2);
+    expect(env.filters.map(({ frequency }) => frequency.setValueAtTime.mock.calls[0]?.[0])).toEqual(
+      [1600, 840],
+    );
+    expect(env.panners.map(({ pan }) => pan.value)).toEqual([-0.7, -0.7]);
+
+    const exchange = {
+      type: 'chip-exchange',
+      street: 'flop',
+      fromPlayerId: 'ca',
+      target: { kind: 'player', playerId: 'nong' },
+      give: { ...empty, 10: 1 },
+      receive: { ...empty, 5: 2 },
+    } as const;
+    audio.playTimelineEventOnce('player-exchange', exchange);
+    const startTimes = env.bufferSources.slice(2).map((source) => source.start.mock.calls[0]![0]!);
+    expect(startTimes).toHaveLength(3);
+    expect(startTimes[1]! - startTimes[0]!).toBeCloseTo(0.085);
+    expect(env.panners.slice(2).map(({ pan }) => pan.value)).toEqual([
+      ...Array<number>(4).fill(-0.7),
+      ...Array<number>(8).fill(0.8),
+    ]);
+    audio.playTimelineEventOnce('pot-exchange', { ...exchange, target: { kind: 'pot' } });
+    expect(env.panners.slice(-8).map(({ pan }) => pan.value)).toEqual(Array<number>(8).fill(0));
+
+    const beforeRefund = env.voices.length;
+    audio.playTimelineEventOnce('refund', {
+      type: 'uncalled-refund',
+      street: 'flop',
+      playerId: 'nong',
+      amount: 50,
+      chips: { ...empty, 50: 1 },
+    });
+    expect(env.voices.slice(beforeRefund)).toHaveLength(4);
+    expect(env.filters.at(-1)!.frequency.setValueAtTime.mock.calls[0]?.[0]).toBe(2950);
+    expect(env.panners.slice(-4).map(({ pan }) => pan.value)).toEqual([0.8, 0.8, 0.8, 0.8]);
+
+    const beforePending = env.voices.length;
+    expect(
+      audio.playTimelineEventOnce('pending', {
+        type: 'payout-pending',
+        requiredPayouts: [{ playerId: 'ca', amount: 100 }],
+        reason: 'insufficient-pot-denominations',
+      }),
+    ).toBe(true);
+    expect(env.voices).toHaveLength(beforePending);
+    audio.dispose();
+  });
+
   it('unlocks Drill 2D only in its native gesture, keeps cue dedup, and releases the idle graph', () => {
     const timer = mockBrowserTimer('timeout');
     const env = audioEnvironment();
@@ -344,5 +532,49 @@ describe('shared audio adapters', () => {
     timer.fire();
     expect(env.context.close).toHaveBeenCalledOnce();
     expect(env.liveVoices()).toHaveLength(0);
+    audio.dispose();
+  });
+
+  it('unlocks only the controller bound to the clicked shell and removes the shared listeners on final disposal', () => {
+    const timer = mockBrowserTimer('timeout');
+    const env = audioEnvironment();
+    const shellA = env.drillShell();
+    const shellB = env.drillShell();
+    const a = new DrillSoundController(shellA);
+    const b = new DrillSoundController(shellB);
+    const gestureListeners = [...env.doc.addEventListener.mock.calls];
+    expect(gestureListeners).toEqual([
+      ['click', expect.any(Function), true],
+      ['keydown', expect.any(Function), true],
+    ]);
+
+    env.click(shellA);
+    expect(env.AudioContextMock).toHaveBeenCalledOnce();
+    b.play({ kind: 'correct' });
+    expect(env.voices).toHaveLength(0);
+    a.play({ kind: 'tick' });
+    expect(env.oscillators).toHaveLength(1);
+
+    env.click(shellB);
+    expect(env.AudioContextMock).toHaveBeenCalledTimes(2);
+    b.play({ kind: 'correct' });
+    expect(env.oscillators).toHaveLength(3);
+    expect(timer.count()).toBe(2);
+    a.dispose();
+    expect(env.contexts[0]!.close).toHaveBeenCalledOnce();
+    expect(env.liveVoices()).toHaveLength(2);
+    expect(timer.count()).toBe(1);
+    for (const [name] of gestureListeners) expect(env.listeners.get(name)?.size).toBe(1);
+
+    b.dispose();
+    expect(env.contexts[1]!.close).toHaveBeenCalledOnce();
+    expect(timer.count()).toBe(0);
+    expect(env.liveVoices()).toHaveLength(0);
+    expect(
+      env.doc.removeEventListener.mock.calls.filter(([name]) => name !== 'visibilitychange'),
+    ).toEqual(gestureListeners);
+    expect([...env.listeners.values()].every((listeners) => listeners.size === 0)).toBe(true);
+    env.click(shellA);
+    expect(env.AudioContextMock).toHaveBeenCalledTimes(2);
   });
 });

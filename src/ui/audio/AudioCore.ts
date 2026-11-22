@@ -1,4 +1,4 @@
-import { createRng, type Rng } from '../../engine/rng';
+import { createRng, type Rng } from '../../engine';
 import type { AudioSettings } from '../sandbox/types';
 import { LoungePad } from './LoungePad';
 
@@ -54,7 +54,8 @@ export class AudioCore {
   private readonly voices = new Set<Voice>();
   private noiseBuffer: AudioBuffer | null = null;
   private pending: Cue[] = [];
-  private resumePending: Promise<void> | null = null;
+  private resumePending: { fromGesture: boolean } | null = null;
+  private suspending = false;
   private observedDocument: Document | null = null;
   private readonly noiseRng: Rng;
   private readonly pad = new LoungePad((layers, at) => {
@@ -85,19 +86,14 @@ export class AudioCore {
         this.context.onstatechange = this.syncMusic;
         if (typeof document !== 'undefined') {
           this.observedDocument = document;
-          document.addEventListener('visibilitychange', this.syncSettings);
+          document.addEventListener('visibilitychange', this.syncVisibility);
         }
       }
-      const context = this.context;
-      if (context.state === 'suspended' && !this.resumePending) {
-        const resume = context.resume();
-        this.resumePending = resume;
-        void resume.then(
-          () => this.finishResume(resume, context),
-          () => this.finishResume(resume, context),
-        );
+      if (this.observedDocument?.hidden) this.syncVisibility();
+      else {
+        void this.resumeContext(this.context, true);
+        this.syncSettings();
       }
-      this.syncSettings();
       return true;
     } catch {
       this.dispose();
@@ -112,11 +108,11 @@ export class AudioCore {
 
   play(channel: AudioChannel, layers: readonly SoundLayer[], pan = 0): void {
     const context = this.context;
-    if (!context || !this.canPlay(channel) || layers.length === 0) return;
+    if (!context || this.suspending || !this.canPlay(channel) || layers.length === 0) return;
     const cue = { channel, layers, pan };
     if (context.state === 'running') {
       this.schedule(cue, context.currentTime + 0.008);
-    } else if (this.resumePending && this.pending.length < MAX_PENDING_CUES) {
+    } else if (this.resumePending?.fromGesture && this.pending.length < MAX_PENDING_CUES) {
       this.pending.push(cue);
     }
   }
@@ -125,8 +121,9 @@ export class AudioCore {
     this.pad.stop();
     this.pending = [];
     this.resumePending = null;
+    this.suspending = false;
     for (const voice of this.voices) this.release(voice, true);
-    this.observedDocument?.removeEventListener('visibilitychange', this.syncSettings);
+    this.observedDocument?.removeEventListener('visibilitychange', this.syncVisibility);
     this.observedDocument = null;
     for (const node of this.graph) node.disconnect();
     this.graph.length = 0;
@@ -166,11 +163,12 @@ export class AudioCore {
   private volume(channel: AudioChannel): number {
     // The existing chip slider also controls table UI cues such as the out-of-turn alert.
     const level = this.settings[channel === 'ui' ? 'chips' : channel];
-    return (Math.max(0, Math.min(level, 100)) / 100) * VOLUME_SCALE;
+    const clamped = Number.isFinite(level) ? Math.max(0, Math.min(level, 100)) : 0;
+    return (clamped / 100) * VOLUME_SCALE;
   }
 
   private isAudible(): boolean {
-    return !this.settings.muted && (typeof document === 'undefined' || !document.hidden);
+    return !this.settings.muted && !this.observedDocument?.hidden;
   }
 
   private canPlay(channel: AudioChannel): boolean {
@@ -190,7 +188,7 @@ export class AudioCore {
 
   private readonly syncMusic = (): void => {
     const context = this.context;
-    if (context?.state === 'running' && this.canPlay('music')) {
+    if (context?.state === 'running' && !this.suspending && this.canPlay('music')) {
       this.pad.start(context);
     } else {
       this.pad.stop();
@@ -200,12 +198,51 @@ export class AudioCore {
     }
   };
 
-  private finishResume(resume: Promise<void>, context: AudioContext): void {
-    if (this.resumePending !== resume) return;
+  private readonly syncVisibility = (): void => {
+    const context = this.context;
+    if (!context || context.state === 'closed') return;
+    this.syncSettings();
+    if (this.observedDocument?.hidden) {
+      // A gesture resume may be waiting for browser permission. Suspend without waiting for it.
+      this.resumePending = null;
+      void this.suspendContext(context);
+    } else {
+      void this.resumeContext(context, false);
+    }
+  };
+
+  private async suspendContext(context: AudioContext): Promise<void> {
+    if (this.suspending) return;
+    this.suspending = true;
+    try {
+      await context.suspend();
+    } catch {
+      // Visibility still gates playback if the browser could not suspend the context.
+    }
+    if (this.context !== context) return;
+    this.suspending = false;
+    if (!this.observedDocument?.hidden) void this.resumeContext(context, false);
+    this.syncMusic();
+  }
+
+  private async resumeContext(context: AudioContext, fromGesture: boolean): Promise<void> {
+    if (this.suspending || context.state === 'running' || context.state === 'closed') return;
+    if (this.resumePending && (!fromGesture || this.resumePending.fromGesture)) return;
+
+    const attempt = { fromGesture };
+    this.resumePending = attempt;
+    let resumed = false;
+    try {
+      await context.resume();
+      resumed = true;
+    } catch {
+      // A later gesture may retry if the browser blocks the visibility resume.
+    }
+    if (this.resumePending !== attempt) return;
     this.resumePending = null;
     const pending = this.pending;
     this.pending = [];
-    if (context.state === 'running') {
+    if (resumed) {
       this.syncSettings();
       for (const cue of pending) this.play(cue.channel, cue.layers, cue.pan);
     }

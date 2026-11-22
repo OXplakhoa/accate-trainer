@@ -1,5 +1,10 @@
-import { DENOMINATIONS, type ChipCounts, type Denomination } from '../../engine/chips';
-import { createRng, type Rng } from '../../engine/rng';
+import {
+  createRng,
+  DENOMINATIONS,
+  type ChipCounts,
+  type Denomination,
+  type Rng,
+} from '../../engine';
 import { AudioCore, type SoundLayer } from './AudioCore';
 
 const MAX_CHIP_TICKS = 12;

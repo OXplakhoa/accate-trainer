@@ -41,14 +41,15 @@ export function audioEnvironment(options: { state?: string; stereo?: boolean } =
   const oscillators: typeof voices = [];
   const bufferSources: typeof voices = [];
   type Listener = (event: { currentTarget: object }) => void;
+  type ListenerRegistration = (name: string, listener: Listener, capture?: boolean) => void;
   const listeners = new Map<string, Set<Listener>>();
   const doc = {
     hidden: false,
-    addEventListener: vi.fn((name: string, listener: Listener) => {
+    addEventListener: vi.fn<ListenerRegistration>((name, listener) => {
       if (!listeners.has(name)) listeners.set(name, new Set());
       listeners.get(name)!.add(listener);
     }),
-    removeEventListener: vi.fn((name: string, listener: Listener) => {
+    removeEventListener: vi.fn<ListenerRegistration>((name, listener) => {
       listeners.get(name)?.delete(listener);
     }),
   };
@@ -98,12 +99,18 @@ export function audioEnvironment(options: { state?: string; stereo?: boolean } =
       return { getChannelData: () => samples };
     }),
     resume: vi.fn<() => Promise<void>>(),
+    suspend: vi.fn<() => Promise<void>>(),
     close: vi.fn<() => Promise<void>>(),
   });
   function createContext() {
     const context = makeContext();
     context.resume.mockImplementation(async () => {
       context.state = 'running';
+      context.onstatechange?.();
+    });
+    context.suspend.mockImplementation(async () => {
+      context.state = 'suspended';
+      context.onstatechange?.();
     });
     context.close.mockImplementation(async () => {
       context.state = 'closed';
@@ -121,6 +128,8 @@ export function audioEnvironment(options: { state?: string; stereo?: boolean } =
   let thisCall = 0;
 
   class FakeElement {
+    readonly ownerDocument = doc;
+
     constructor(private readonly inDrill: boolean) {}
 
     closest(selector: string) {
@@ -140,6 +149,7 @@ export function audioEnvironment(options: { state?: string; stereo?: boolean } =
   vi.stubGlobal('KeyboardEvent', class {});
   return {
     context: contexts[0]!,
+    contexts,
     voices,
     oscillators,
     bufferSources,
@@ -162,8 +172,12 @@ export function audioEnvironment(options: { state?: string; stereo?: boolean } =
       doc.hidden = hidden;
       dispatch('visibilitychange', {});
     },
-    click: (inDrill: boolean, isTrusted = true) => {
-      dispatch('click', { target: new FakeElement(inDrill), isTrusted });
+    drillShell: () => new FakeElement(true) as unknown as Element,
+    click: (target: boolean | Element, isTrusted = true) => {
+      dispatch('click', {
+        target: typeof target === 'boolean' ? new FakeElement(target) : target,
+        isTrusted,
+      });
     },
   };
 }
