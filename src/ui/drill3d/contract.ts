@@ -1,9 +1,17 @@
+import type { ChipCounts } from '../../engine';
+import type { PublicTableSeat, TableSeatId } from '../sandbox/types';
+
 export type ScenePhase = 'arrival' | 'decision' | 'review';
 export type LessonHighlight = 'outs' | 'pot' | 'call' | 'total' | null;
 
 export type SceneRival = 'ca' | 'cao' | 'nong';
 
 export interface LiveSceneDetails {
+  readonly potChips: ChipCounts;
+  readonly handNumber: number;
+  readonly timelineLength: number;
+  readonly seats: readonly PublicTableSeat[];
+  readonly payoutTransfers: readonly { readonly seatId: TableSeatId; readonly chips: ChipCounts }[];
   readonly street: 'preflop' | 'flop' | 'turn' | 'river' | null;
   readonly occupiedRivals: readonly SceneRival[];
   readonly activeRival: SceneRival | null;

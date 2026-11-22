@@ -36,6 +36,7 @@ function makeLiveSpot(
     board: ['K♥', '8♦', '5♣'],
     ...rest,
     live: {
+      potChips: { 5: 1, 10: 0, 50: 1, 100: 0 }, handNumber: 1, timelineLength: 0, seats: [], payoutTransfers: [],
       street: 'flop',
       occupiedRivals: ['ca', 'cao', 'nong'],
       activeRival: 'ca',

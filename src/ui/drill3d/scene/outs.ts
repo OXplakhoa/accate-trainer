@@ -1,3 +1,4 @@
+import { DENOMINATIONS, emptyChips, type ChipCounts, type Denomination } from '../../../engine';
 import type { SceneTableSnapshot } from '../contract';
 
 export type CardSuit = '♥' | '♦' | '♣' | '♠';
@@ -109,61 +110,55 @@ export interface ChipDenomSpec {
   readonly accentHex: string;
 }
 
-const CHIP_DENOMS: readonly ChipDenomSpec[] = [
-  { value: 500, bodyHex: '#6F4C7A', stripeHex: '#F7EFE2', accentHex: '#E5D4EC' },
-  { value: 100, bodyHex: '#3B3635', stripeHex: '#E8C596', accentHex: '#D8C7B4' },
-  { value: 50, bodyHex: '#C95849', stripeHex: '#F5EAD8', accentHex: '#E9C890' },
-  { value: 25, bodyHex: '#2E6A5E', stripeHex: '#F3E8D4', accentHex: '#A7D3C7' },
-  { value: 10, bodyHex: '#4F9DD3', stripeHex: '#F7EFE2', accentHex: '#D8ECFA' },
-  { value: 5, bodyHex: '#D89A46', stripeHex: '#533C31', accentHex: '#F7E7CA' },
-  { value: 1, bodyHex: '#E8DEC9', stripeHex: '#7A5B47', accentHex: '#CBB89D' },
-];
-
-const MAX_CHIPS_PER_STACK = 10;
+const CHIP_DENOMS: Readonly<Record<Denomination, ChipDenomSpec>> = {
+  5: { value: 5, bodyHex: '#b23b32', stripeHex: '#f5eee2', accentHex: '#faf3e6' },
+  10: { value: 10, bodyHex: '#206785', stripeHex: '#edc28d', accentHex: '#f2f7f9' },
+  50: { value: 50, bodyHex: '#b87a24', stripeHex: '#194a38', accentHex: '#fcf5e6' },
+  100: { value: 100, bodyHex: '#2c2638', stripeHex: '#edc28d', accentHex: '#f8f0df' },
+};
 
 export interface ChipStackItem {
   readonly denom: ChipDenomSpec;
   readonly count: number;
 }
 
-export function buildChipStacksForAmount(amount: number): readonly ChipStackItem[] {
-  let remaining = Math.max(0, Math.round(amount));
-  if (remaining <= 0) {
-    return [];
-  }
+export const CHIP_RADIUS = 0.072;
 
-  // Keep exact tactile Drill breakdown for 100 (2x50) and 50 (1x25 + 2x10 + 1x5)
-  if (remaining === 100) {
-    const fifty = CHIP_DENOMS.find((d) => d.value === 50);
-    if (fifty) {
-      return [{ denom: fifty, count: 2 }];
-    }
-  }
-  if (remaining === 50) {
-    const twentyFive = CHIP_DENOMS.find((d) => d.value === 25);
-    const ten = CHIP_DENOMS.find((d) => d.value === 10);
-    const five = CHIP_DENOMS.find((d) => d.value === 5);
-    if (twentyFive && ten && five) {
-      return [
-        { denom: twentyFive, count: 1 },
-        { denom: ten, count: 2 },
-        { denom: five, count: 1 },
-      ];
-    }
-  }
+/** Centre all columns, including an incomplete final row, on the anchor. */
+export function layoutChipColumns(count: number): readonly { x: number; z: number }[] {
+  if (count <= 0) return [];
+  const cols = Math.min(5, count);
+  const spacing = 0.16;
+  const offsets = Array.from({ length: count }, (_, i) => ({
+    x: (i % cols - (cols - 1) / 2) * spacing,
+    z: Math.floor(i / cols) * spacing,
+  }));
+  const meanX = offsets.reduce((sum, offset) => sum + offset.x, 0) / count;
+  const meanZ = offsets.reduce((sum, offset) => sum + offset.z, 0) / count;
+  return offsets.map(({ x, z }) => ({ x: x - meanX, z: z - meanZ }));
+}
 
+/** Split physical counts into columns without hiding chips. */
+export function buildChipStacks(chips: ChipCounts): readonly ChipStackItem[] {
   const stacks: ChipStackItem[] = [];
-
-  for (const denom of CHIP_DENOMS) {
-    if (remaining <= 0) {
-      break;
-    }
-    const rawCount = Math.floor(remaining / denom.value);
-    if (rawCount > 0) {
-      stacks.push({ denom, count: Math.min(MAX_CHIPS_PER_STACK, rawCount) });
-      remaining -= rawCount * denom.value;
+  for (const d of [...DENOMINATIONS].reverse()) {
+    for (let remaining = chips[d]; remaining > 0; remaining -= 10) {
+      stacks.push({ denom: CHIP_DENOMS[d], count: Math.min(10, remaining) });
     }
   }
-
   return stacks;
+}
+
+export function chipsForAmount(amount: number): ChipCounts {
+  let remaining = Math.max(0, Math.floor(amount));
+  const chips = { ...emptyChips() };
+  for (const d of [...DENOMINATIONS].reverse()) {
+    chips[d] = Math.floor(remaining / d);
+    remaining -= chips[d] * d;
+  }
+  return chips;
+}
+
+export function buildChipStacksForAmount(amount: number): readonly ChipStackItem[] {
+  return buildChipStacks(chipsForAmount(amount));
 }
