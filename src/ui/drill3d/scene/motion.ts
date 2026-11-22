@@ -173,27 +173,101 @@ export function getLiveCharacterPose(
   };
 }
 
+export interface MutableCharacterPoseState {
+  caHeadRotY: number;
+  caHeadRotX: number;
+  caLean: number;
+  caLidOffset: number;
+  caoHeadRotY: number;
+  caoHeadRotX: number;
+  caoLean: number;
+  caoBrowLift: number;
+  nongHeadRotY: number;
+  nongHeadRotX: number;
+  nongLean: number;
+  nongLidTilt: number;
+  nongSteamScale: number;
+  nongBrowTilt: number;
+}
+
+export function createMutableCharacterPose(src: CharacterPoseState): MutableCharacterPoseState {
+  return {
+    caHeadRotY: src.caHeadRotY,
+    caHeadRotX: src.caHeadRotX,
+    caLean: src.caLean,
+    caLidOffset: src.caLidOffset,
+    caoHeadRotY: src.caoHeadRotY,
+    caoHeadRotX: src.caoHeadRotX,
+    caoLean: src.caoLean,
+    caoBrowLift: src.caoBrowLift,
+    nongHeadRotY: src.nongHeadRotY,
+    nongHeadRotX: src.nongHeadRotX,
+    nongLean: src.nongLean,
+    nongLidTilt: src.nongLidTilt,
+    nongSteamScale: src.nongSteamScale,
+    nongBrowTilt: src.nongBrowTilt,
+  };
+}
+
+export function copyCharacterPose(src: CharacterPoseState, out: MutableCharacterPoseState): void {
+  out.caHeadRotY = src.caHeadRotY;
+  out.caHeadRotX = src.caHeadRotX;
+  out.caLean = src.caLean;
+  out.caLidOffset = src.caLidOffset;
+  out.caoHeadRotY = src.caoHeadRotY;
+  out.caoHeadRotX = src.caoHeadRotX;
+  out.caoLean = src.caoLean;
+  out.caoBrowLift = src.caoBrowLift;
+  out.nongHeadRotY = src.nongHeadRotY;
+  out.nongHeadRotX = src.nongHeadRotX;
+  out.nongLean = src.nongLean;
+  out.nongLidTilt = src.nongLidTilt;
+  out.nongSteamScale = src.nongSteamScale;
+  out.nongBrowTilt = src.nongBrowTilt;
+}
+
+export function lerpCharacterPoseInto(
+  from: CharacterPoseState,
+  to: CharacterPoseState,
+  t: number,
+  out: MutableCharacterPoseState,
+): void {
+  out.caHeadRotY = from.caHeadRotY + (to.caHeadRotY - from.caHeadRotY) * t;
+  out.caHeadRotX = from.caHeadRotX + (to.caHeadRotX - from.caHeadRotX) * t;
+  out.caLean = from.caLean + (to.caLean - from.caLean) * t;
+  out.caLidOffset = from.caLidOffset + (to.caLidOffset - from.caLidOffset) * t;
+  out.caoHeadRotY = from.caoHeadRotY + (to.caoHeadRotY - from.caoHeadRotY) * t;
+  out.caoHeadRotX = from.caoHeadRotX + (to.caoHeadRotX - from.caoHeadRotX) * t;
+  out.caoLean = from.caoLean + (to.caoLean - from.caoLean) * t;
+  out.caoBrowLift = from.caoBrowLift + (to.caoBrowLift - from.caoBrowLift) * t;
+  out.nongHeadRotY = from.nongHeadRotY + (to.nongHeadRotY - from.nongHeadRotY) * t;
+  out.nongHeadRotX = from.nongHeadRotX + (to.nongHeadRotX - from.nongHeadRotX) * t;
+  out.nongLean = from.nongLean + (to.nongLean - from.nongLean) * t;
+  out.nongLidTilt = from.nongLidTilt + (to.nongLidTilt - from.nongLidTilt) * t;
+  out.nongSteamScale = from.nongSteamScale + (to.nongSteamScale - from.nongSteamScale) * t;
+  out.nongBrowTilt = from.nongBrowTilt + (to.nongBrowTilt - from.nongBrowTilt) * t;
+}
+
 export function lerpCharacterPose(
   from: CharacterPoseState,
   to: CharacterPoseState,
   t: number,
 ): CharacterPoseState {
-  const l = (a: number, b: number) => a + (b - a) * t;
   return {
-    caHeadRotY: l(from.caHeadRotY, to.caHeadRotY),
-    caHeadRotX: l(from.caHeadRotX, to.caHeadRotX),
-    caLean: l(from.caLean, to.caLean),
-    caLidOffset: l(from.caLidOffset, to.caLidOffset),
-    caoHeadRotY: l(from.caoHeadRotY, to.caoHeadRotY),
-    caoHeadRotX: l(from.caoHeadRotX, to.caoHeadRotX),
-    caoLean: l(from.caoLean, to.caoLean),
-    caoBrowLift: l(from.caoBrowLift, to.caoBrowLift),
-    nongHeadRotY: l(from.nongHeadRotY, to.nongHeadRotY),
-    nongHeadRotX: l(from.nongHeadRotX, to.nongHeadRotX),
-    nongLean: l(from.nongLean, to.nongLean),
-    nongLidTilt: l(from.nongLidTilt, to.nongLidTilt),
-    nongSteamScale: l(from.nongSteamScale, to.nongSteamScale),
-    nongBrowTilt: l(from.nongBrowTilt, to.nongBrowTilt),
+    caHeadRotY: from.caHeadRotY + (to.caHeadRotY - from.caHeadRotY) * t,
+    caHeadRotX: from.caHeadRotX + (to.caHeadRotX - from.caHeadRotX) * t,
+    caLean: from.caLean + (to.caLean - from.caLean) * t,
+    caLidOffset: from.caLidOffset + (to.caLidOffset - from.caLidOffset) * t,
+    caoHeadRotY: from.caoHeadRotY + (to.caoHeadRotY - from.caoHeadRotY) * t,
+    caoHeadRotX: from.caoHeadRotX + (to.caoHeadRotX - from.caoHeadRotX) * t,
+    caoLean: from.caoLean + (to.caoLean - from.caoLean) * t,
+    caoBrowLift: from.caoBrowLift + (to.caoBrowLift - from.caoBrowLift) * t,
+    nongHeadRotY: from.nongHeadRotY + (to.nongHeadRotY - from.nongHeadRotY) * t,
+    nongHeadRotX: from.nongHeadRotX + (to.nongHeadRotX - from.nongHeadRotX) * t,
+    nongLean: from.nongLean + (to.nongLean - from.nongLean) * t,
+    nongLidTilt: from.nongLidTilt + (to.nongLidTilt - from.nongLidTilt) * t,
+    nongSteamScale: from.nongSteamScale + (to.nongSteamScale - from.nongSteamScale) * t,
+    nongBrowTilt: from.nongBrowTilt + (to.nongBrowTilt - from.nongBrowTilt) * t,
   };
 }
 
@@ -303,6 +377,7 @@ export function getSceneVisualKey(state: SceneMotionState): string {
     serializeChips(live.potChips),
     String(live.handNumber),
     String(live.timelineLength),
+    live.dealerSeatId ?? 'none',
     live.street ?? 'idle',
     live.occupiedRivals.join(','),
     live.activeRival ?? 'none',

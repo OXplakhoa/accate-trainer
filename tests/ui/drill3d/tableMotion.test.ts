@@ -1,29 +1,41 @@
 import type * as THREE from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { emptyChips, type ChipCounts } from '../../../src/engine';
+import { DENOMINATIONS, emptyChips, type ChipCounts } from '../../../src/engine';
 import {
   DEMO_SPOT,
   type LiveSceneDetails,
   type SceneTableSnapshot,
 } from '../../../src/ui/drill3d/contract';
-import { formatSeatActionBubble } from '../../../src/ui/drill3d/scene/actionBubble';
+import {
+  ACTION_BUBBLE_CANVAS,
+  formatSeatActionBubble,
+} from '../../../src/ui/drill3d/scene/actionBubble';
 import { getSceneVisualKey, type SceneMotionState } from '../../../src/ui/drill3d/scene/motion';
 import {
+  ALL_SEAT_IDS,
+  classifyLiveProgress,
+  computeRestingChipAllocation,
+  computeTableChipAllocation,
   getLiveEventKey,
+  getLiveProgressMark,
   getPlanDurationMs,
+  MAX_PLAN_DURATION_MS,
   planTableAnimations,
   TABLE_ANIMATION_DURATIONS,
+  type LiveProgressMark,
 } from '../../../src/ui/drill3d/scene/tableMotion';
 import { toLiveSceneSnapshot } from '../../../src/ui/liveSandbox3d/snapshot';
 import {
   createSandboxSession,
   enterHandBoundary,
+  getHeroActionValidation,
   performHeroAction,
+  stageChip,
   startNextHand,
   stepOneBotTurn,
 } from '../../../src/ui/sandbox/controller';
 import { buildSandboxTableView } from '../../../src/ui/sandbox/tableView';
-import type { PublicTableSeat, TableSeatId } from '../../../src/ui/sandbox/types';
+import type { PublicTableSeat, SandboxSessionState, TableSeatId } from '../../../src/ui/sandbox/types';
 
 function makeChips(partial: Partial<ChipCounts> = {}): ChipCounts {
   return { ...emptyChips(), ...partial };
@@ -197,9 +209,10 @@ describe('tableMotion pure event-diff animation planner', () => {
 
   it('plans bet-chips with exact added denominations when a seat bets, calls, or raises', () => {
     const beforeBet = makeLiveSnapshot({
-      pot: 20,
+      pot: 30,
       live: {
         timelineLength: 4,
+        potChips: makeChips({ 5: 4, 10: 1 }),
         seats: [
           makeSeat('hero'),
           makeSeat('ca', { streetChips: makeChips({ 10: 1 }), isActor: true }),
@@ -209,10 +222,10 @@ describe('tableMotion pure event-diff animation planner', () => {
       },
     });
     const afterRaise = makeLiveSnapshot({
-      pot: 45,
+      pot: 55,
       live: {
         timelineLength: 5,
-        potChips: makeChips({ 5: 5, 10: 2 }),
+        potChips: makeChips({ 5: 5, 10: 3 }),
         seats: [
           makeSeat('hero'),
           makeSeat('ca', {
@@ -246,6 +259,7 @@ describe('tableMotion pure event-diff animation planner', () => {
       live: {
         timelineLength: 8,
         street: 'flop',
+        potChips: makeChips({ 5: 6, 10: 5 }),
         seats: [
           makeSeat('hero', { streetChips: makeChips({ 10: 3 }) }),
           makeSeat('ca', { streetChips: makeChips({ 5: 2, 10: 2 }) }),
@@ -260,6 +274,7 @@ describe('tableMotion pure event-diff animation planner', () => {
       live: {
         timelineLength: 9,
         street: 'turn',
+        potChips: makeChips({ 5: 6, 10: 5 }),
         seats: [
           makeSeat('hero', { streetChips: emptyChips() }),
           makeSeat('ca', { streetChips: emptyChips() }),
@@ -663,7 +678,9 @@ describe('buildTabletop 3D live seats, hidden info, board legibility, and Drill 
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const { buildTabletop } = await import('../../../src/ui/drill3d/scene/buildTabletop');
     const live = makeLiveSnapshot({
+      pot: 40,
       live: {
+        potChips: makeChips({ 5: 4, 10: 2 }),
         seats: [
           makeSeat('hero', { isActor: true, revealedCards: ['A♥', 'K♦'] }),
           makeSeat('ca', {
@@ -843,5 +860,557 @@ describe('buildTabletop 3D live seats, hidden info, board legibility, and Drill 
     rig.snapAnimations?.();
     expect(rig.hasActiveAnimations?.()).toBe(false);
     expect(animFx.children).toHaveLength(0);
+  });
+});
+
+function playHeroCheckOrCall(session: SandboxSessionState): SandboxSessionState {
+  const hand = session.hand;
+  if (!hand || hand.phase !== 'betting') {
+    return session;
+  }
+  if (hand.activePlayerId !== 'hero') {
+    return stepOneBotTurn(session);
+  }
+  const validation = getHeroActionValidation(session);
+  if (validation.canCheck) {
+    return performHeroAction(session, 'check');
+  }
+  const hero = hand.seats.find((s) => s.playerId === 'hero')!;
+  let remaining = validation.callAmount ?? 0;
+  let staged = session;
+  for (const d of [100, 50, 10, 5] as const) {
+    const count = Math.min(hero.stack[d], Math.floor(remaining / d));
+    for (let n = 0; n < count; n += 1) {
+      staged = stageChip(staged, d);
+    }
+    remaining -= count * d;
+  }
+  if (remaining === 0 && getHeroActionValidation(staged).canConfirmCall) {
+    return performHeroAction(staged, 'call');
+  }
+  return performHeroAction(session, 'fold');
+}
+
+function collectSeededSnapshots(seed: string): readonly SceneTableSnapshot[] {
+  let session = createSandboxSession({
+    seed,
+    settings: { playerCount: 4, enabledRivalIds: ['ca', 'cao', 'nong'] },
+  });
+  const snaps: SceneTableSnapshot[] = [toLiveSceneSnapshot(buildSandboxTableView(session, 0, false))];
+  for (let i = 0; i < 80 && session.hand?.phase === 'betting'; i += 1) {
+    session = playHeroCheckOrCall(session);
+    snaps.push(toLiveSceneSnapshot(buildSandboxTableView(session, 0, false)));
+  }
+  return snaps;
+}
+
+function readPileChipCounts(group: THREE.Object3D): ChipCounts {
+  const counts = { ...emptyChips() };
+  group.traverse((obj) => {
+    const inst = obj as THREE.InstancedMesh;
+    if (!inst.isInstancedMesh || !obj.visible) {
+      return;
+    }
+    // Check ancestor visibility up to group
+    let cur: THREE.Object3D | null = obj;
+    while (cur && cur !== group) {
+      if (!cur.visible) return;
+      cur = cur.parent;
+    }
+    const mats = Array.isArray(inst.material) ? inst.material : [inst.material];
+    const topMat = mats[1] as THREE.MeshStandardMaterial | undefined;
+    const label = topMat?.map?.name ?? '';
+    const match = /^chip:(\d+)$/.exec(label);
+    if (match) {
+      const denom = Number(match[1]) as (typeof DENOMINATIONS)[number];
+      if (denom in counts) {
+        counts[denom] += inst.count;
+      }
+    }
+  });
+  return counts;
+}
+
+describe('L1 fix1: chip conservation, closing call, monotonic progress, dealer dealing, disposal, camera & readability', () => {
+  it('conserves every physical chip per denomination across sandbox3d-1 resting and mid-flight states (including 3D scene graph & same-key updates)', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { buildTabletop } = await import('../../../src/ui/drill3d/scene/buildTabletop');
+    const snaps = collectSeededSnapshots('sandbox3d-1');
+    expect(snaps.length).toBeGreaterThan(6);
+
+    let highWater: LiveProgressMark | null = null;
+    let prev: SceneTableSnapshot | null = null;
+    const rig = buildTabletop(snaps[0]!);
+
+    for (const snap of snaps) {
+      const live = snap.live!;
+      const expectedTotal = { ...emptyChips() };
+      for (const d of DENOMINATIONS) {
+        expectedTotal[d] =
+          live.potChips[d] + live.seats.reduce((sum, s) => sum + s.stackChips[d], 0);
+      }
+
+      // Resting conservation
+      const resting = computeRestingChipAllocation(live);
+      for (const d of DENOMINATIONS) {
+        const restingSum =
+          resting.centerPot[d] +
+          ALL_SEAT_IDS.reduce((sum, id) => sum + resting.seatStacks[id][d] + resting.seatBets[id][d], 0);
+        expect(restingSum).toBe(expectedTotal[d]);
+      }
+
+      const plan = planTableAnimations(prev, snap, false, highWater);
+      expect(getPlanDurationMs(plan.animations)).toBeLessThanOrEqual(MAX_PLAN_DURATION_MS);
+      highWater = plan.highWater ?? getLiveProgressMark(live);
+      prev = snap;
+
+      rig.snapAnimations?.();
+      rig.updateSpot(snap);
+
+      if (plan.mode === 'animate' && plan.animations.length > 0) {
+        const duration = getPlanDurationMs(plan.animations);
+        rig.playAnimations?.(plan.animations, 1000);
+
+        for (const t of [0, Math.floor(duration * 0.25), Math.floor(duration * 0.5), duration - 1]) {
+          // Pure allocator conservation mid-flight
+          const alloc = computeTableChipAllocation(live, plan.animations, t);
+          expect(alloc.reconcilable).toBe(true);
+          for (const d of DENOMINATIONS) {
+            const totalAtT =
+              alloc.centerPot[d] +
+              alloc.inFlight[d] +
+              ALL_SEAT_IDS.reduce((sum, id) => sum + alloc.seatStacks[id][d] + alloc.seatBets[id][d], 0);
+            expect(totalAtT).toBe(expectedTotal[d]);
+          }
+
+          // Real 3D InstancedMesh conservation mid-flight
+          rig.stepAnimations?.(1000 + t);
+          const potMeshCounts = readPileChipCounts(rig.root.getObjectByName('PotChips')!);
+          const fxMeshCounts = readPileChipCounts(rig.root.getObjectByName('TableAnimFx')!);
+          const seatSum = { ...emptyChips() };
+          for (const seatId of ALL_SEAT_IDS) {
+            const st = readPileChipCounts(rig.root.getObjectByName(`SeatStack-${seatId}`)!);
+            const bt = readPileChipCounts(rig.root.getObjectByName(`SeatBet-${seatId}`)!);
+            for (const d of DENOMINATIONS) {
+              seatSum[d] += st[d] + bt[d];
+            }
+          }
+          for (const d of DENOMINATIONS) {
+            expect(potMeshCounts[d] + fxMeshCounts[d] + seatSum[d]).toBe(expectedTotal[d]);
+          }
+        }
+
+        // Same-key update mid-flight (e.g. only `call` changed) must preserve mid-flight piles
+        rig.stepAnimations?.(1000 + Math.floor(duration * 0.4));
+        const beforeSameKeyStack = readPileChipCounts(rig.root.getObjectByName('SeatStack-cao')!);
+        rig.updateSpot({ ...snap, call: snap.call + 15 });
+        expect(rig.hasActiveAnimations?.()).toBe(true);
+        const afterSameKeyStack = readPileChipCounts(rig.root.getObjectByName('SeatStack-cao')!);
+        expect(afterSameKeyStack).toEqual(beforeSameKeyStack);
+
+        rig.stepAnimations?.(1000 + duration + 10);
+        expect(rig.hasActiveAnimations?.()).toBe(false);
+      }
+    }
+  });
+
+  it('keeps existing bet pile visible during a raise and snaps non-reconcilable pot chip exchanges', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { buildTabletop } = await import('../../../src/ui/drill3d/scene/buildTabletop');
+
+    const beforeRaise = makeLiveSnapshot({
+      pot: 30,
+      live: {
+        timelineLength: 4,
+        potChips: makeChips({ 5: 4, 10: 1 }),
+        seats: [
+          makeSeat('hero'),
+          makeSeat('ca', { streetChips: makeChips({ 10: 1 }), stackChips: makeChips({ 5: 10, 10: 10 }) }),
+          makeSeat('cao'),
+          makeSeat('nong'),
+        ],
+      },
+    });
+    const afterRaise = makeLiveSnapshot({
+      pot: 55,
+      live: {
+        timelineLength: 5,
+        potChips: makeChips({ 5: 5, 10: 3 }),
+        seats: [
+          makeSeat('hero'),
+          makeSeat('ca', { streetChips: makeChips({ 5: 1, 10: 3 }), stackChips: makeChips({ 5: 9, 10: 8 }) }),
+          makeSeat('cao'),
+          makeSeat('nong'),
+        ],
+      },
+    });
+
+    const rig = buildTabletop(beforeRaise);
+    const plan = planTableAnimations(beforeRaise, afterRaise, false);
+    expect(plan.mode).toBe('animate');
+    rig.updateSpot(afterRaise);
+    rig.playAnimations?.(plan.animations, 500);
+    rig.stepAnimations?.(600);
+
+    // Existing 10-chip bet pile stays visible while only the +25 increment (1x5, 2x10) flies
+    const caBetMid = readPileChipCounts(rig.root.getObjectByName('SeatBet-ca')!);
+    expect(caBetMid).toEqual(makeChips({ 10: 1 }));
+    const fxMid = readPileChipCounts(rig.root.getObjectByName('TableAnimFx')!);
+    expect(fxMid).toEqual(makeChips({ 5: 1, 10: 2 }));
+    const potMid = readPileChipCounts(rig.root.getObjectByName('PotChips')!);
+    expect(potMid).toEqual(makeChips({ 5: 4 }));
+
+    // Non-reconcilable pot chip exchange: potChips cannot cover streetChips by denomination -> snap, no seat bets
+    const exchanged = makeLiveSnapshot({
+      pot: 55,
+      live: {
+        timelineLength: 6,
+        potChips: makeChips({ 50: 1, 5: 1 }),
+        seats: [
+          makeSeat('hero'),
+          makeSeat('ca', { streetChips: makeChips({ 5: 1, 10: 3 }) }),
+          makeSeat('cao'),
+          makeSeat('nong'),
+        ],
+      },
+    });
+    const exchangePlan = planTableAnimations(afterRaise, exchanged, false);
+    expect(exchangePlan.mode).toBe('snap');
+    expect(exchangePlan.animations).toEqual([]);
+    const exAlloc = computeRestingChipAllocation(exchanged.live!);
+    expect(exAlloc.reconcilable).toBe(false);
+    expect(exAlloc.centerPot).toEqual(makeChips({ 50: 1, 5: 1 }));
+    expect(exAlloc.seatBets.ca).toEqual(emptyChips());
+  });
+
+  it('plans Cá closing Call 35 alongside street sweep and River deal on sandbox3d-1 timeline 10 -> 12', () => {
+    const snaps = collectSeededSnapshots('sandbox3d-1');
+    const idx10 = snaps.findIndex((s) => s.live?.timelineLength === 10);
+    expect(idx10).toBeGreaterThanOrEqual(0);
+    const snap10 = snaps[idx10]!;
+    const snap12 = snaps[idx10 + 1]!;
+    expect(snap12.live?.timelineLength).toBe(12);
+    expect(snap10.live?.street).toBe('turn');
+    expect(snap12.live?.street).toBe('river');
+
+    const plan = planTableAnimations(snap10, snap12, false);
+    expect(plan.mode).toBe('animate');
+    expect(getPlanDurationMs(plan.animations)).toBeLessThanOrEqual(MAX_PLAN_DURATION_MS);
+
+    const closingBet = plan.animations.find((a) => a.type === 'bet-chips');
+    expect(closingBet).toBeDefined();
+    if (closingBet?.type === 'bet-chips') {
+      expect(closingBet.seatId).toBe('ca');
+      expect(closingBet.toPot).toBe(true);
+      expect(closingBet.chips).toEqual(makeChips({ 5: 1, 10: 3 }));
+    }
+    expect(plan.animations.some((a) => a.type === 'street-sweep')).toBe(true);
+    expect(plan.animations.some((a) => a.type === 'deal-board')).toBe(true);
+
+    // Ambiguous compound update (two seats drop stacks on street advance) must snap
+    const ambiguousNext = makeLiveSnapshot({
+      pot: 250,
+      board: snap12.board,
+      live: {
+        ...snap12.live!,
+        potChips: makeChips({ 5: snap12.live!.potChips[5] + 4, 10: snap12.live!.potChips[10], 50: snap12.live!.potChips[50], 100: snap12.live!.potChips[100] }),
+        seats: snap12.live!.seats.map((s) =>
+          s.id === 'nong' ? { ...s, stackChips: { ...s.stackChips, 5: s.stackChips[5] - 4 } } : s,
+        ),
+      },
+    });
+    const ambiguousPlan = planTableAnimations(snap10, ambiguousNext, false);
+    expect(ambiguousPlan.mode).toBe('snap');
+    expect(ambiguousPlan.animations).toEqual([]);
+  });
+
+  it('enforces monotonic progress (3 -> 4 -> 3 -> 4 replays never, lower handNumber snaps, multi-street jump snaps)', () => {
+    const snaps = collectSeededSnapshots('sandbox3d-1');
+    const snap3 = snaps.find((s) => s.live?.timelineLength === 3)!;
+    const snap4 = snaps.find((s) => s.live?.timelineLength === 4)!;
+    expect(snap3).toBeDefined();
+    expect(snap4).toBeDefined();
+
+    // Start at timeline 3
+    let highWater: LiveProgressMark | null = getLiveProgressMark(snap3.live!);
+    let lastAccepted: SceneTableSnapshot = snap3;
+
+    // 3 -> 4 plays Cáo's Bet 35 once
+    const first4 = planTableAnimations(lastAccepted, snap4, false, highWater);
+    expect(first4.mode).toBe('animate');
+    expect(first4.animations.some((a) => a.type === 'bet-chips' && a.seatId === 'cao')).toBe(true);
+    highWater = first4.highWater!;
+    lastAccepted = snap4;
+
+    // 4 -> 3 (stale): snaps and does NOT lower highWater
+    expect(classifyLiveProgress(highWater, snap3.live!)).toBe('stale');
+    const stale3 = planTableAnimations(lastAccepted, snap3, false, highWater);
+    expect(stale3.mode).toBe('snap');
+    expect(stale3.animations).toEqual([]);
+    expect(stale3.highWater).toEqual(highWater);
+
+    // 3 -> 4 again (equal to highWater): must NOT replay Cáo's Bet 35
+    expect(classifyLiveProgress(highWater, snap4.live!)).toBe('equal');
+    const second4 = planTableAnimations(lastAccepted, snap4, false, highWater);
+    expect(second4.mode).toBe('none');
+    expect(second4.animations).toEqual([]);
+
+    // Lower handNumber snaps and preserves high-water mark
+    const hand2HighWater: LiveProgressMark = { handNumber: 2, inHand: true, timelineLength: 3 };
+    const lowerHandPlan = planTableAnimations(snap4, snap3, false, hand2HighWater);
+    expect(lowerHandPlan.mode).toBe('snap');
+    expect(lowerHandPlan.animations).toEqual([]);
+    expect(lowerHandPlan.highWater).toEqual(hand2HighWater);
+
+    // Skipped multi-street snapshot (flop -> river) snaps
+    const flopSnap = makeLiveSnapshot({
+      board: ['K♥', '8♦', '5♣'],
+      live: { handNumber: 1, timelineLength: 5, street: 'flop' },
+    });
+    const riverSkip = makeLiveSnapshot({
+      board: ['K♥', '8♦', '5♣', '2♠', '9♥'],
+      live: { handNumber: 1, timelineLength: 14, street: 'river' },
+    });
+    const multiStreetPlan = planTableAnimations(flopSnap, riverSkip, false);
+    expect(multiStreetPlan.mode).toBe('snap');
+    expect(multiStreetPlan.animations).toEqual([]);
+
+    // Skipped new-hand snapshot with 5 board cards already dealt snaps (never exceeds 450 ms)
+    const skippedNewHand = makeLiveSnapshot({
+      board: ['K♥', '8♦', '5♣', '2♠', '9♥'],
+      live: { handNumber: 2, timelineLength: 12, street: 'river' },
+    });
+    const skippedNewPlan = planTableAnimations(flopSnap, skippedNewHand, false);
+    expect(skippedNewPlan.mode).toBe('snap');
+    expect(skippedNewPlan.animations).toEqual([]);
+  });
+
+  it('deals from the real dealer seat, settles each card individually without hiding the whole seat, and supports initial mount deal', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { buildTabletop, getDealOrigin } = await import('../../../src/ui/drill3d/scene/buildTabletop');
+
+    // Initial preflop empty-board snapshot on mount (prev === null) plays deal once from dealer seat
+    const initialPreflop = makeLiveSnapshot({
+      board: [],
+      live: {
+        handNumber: 1,
+        timelineLength: 2,
+        dealerSeatId: 'ca',
+        street: 'preflop',
+        potChips: makeChips({ 5: 4 }),
+        seats: makeDefaultSeats(),
+      },
+    });
+    const initPlan = planTableAnimations(null, initialPreflop, false);
+    expect(initPlan.mode).toBe('animate');
+    expect(initPlan.animations).toHaveLength(1);
+    const deal = initPlan.animations[0]!;
+    expect(deal.type).toBe('deal-hand');
+    if (deal.type === 'deal-hand') {
+      expect(deal.dealerSeatId).toBe('ca');
+      // Starts clockwise after Cá: Cáo -> Nóng -> Hero -> Cá
+      expect(deal.seatIds).toEqual(['cao', 'nong', 'hero', 'ca']);
+    }
+    expect(getPlanDurationMs(initPlan.animations)).toBeLessThanOrEqual(MAX_PLAN_DURATION_MS);
+
+    // Mid-hand initial mount snaps
+    const midHandMount = makeLiveSnapshot({
+      board: ['K♥', '8♦', '5♣', '2♠'],
+      live: { handNumber: 1, timelineLength: 9, street: 'turn', dealerSeatId: 'hero' },
+    });
+    expect(planTableAnimations(null, midHandMount, false).mode).toBe('snap');
+
+    // Verify 3D flight origin starts at Cá's dealOrigin and each card settles at its own flight end
+    const rig = buildTabletop(initialPreflop);
+    rig.playAnimations?.(initPlan.animations, 1000);
+    const animFx = rig.root.getObjectByName('TableAnimFx')!;
+    const caoOrigin = getDealOrigin('ca');
+    // At t=0: first flying card is visible right at Cá's deal origin
+    const firstFlyingCard = animFx.children[0]!;
+    expect(firstFlyingCard.visible).toBe(true);
+    expect(firstFlyingCard.position.x).toBeCloseTo(caoOrigin[0], 4);
+    expect(firstFlyingCard.position.z).toBeCloseTo(caoOrigin[2], 4);
+
+    // Hero seat group stays visible while individual cards settle on their own schedule
+    const heroGroup = rig.root.getObjectByName('HeroCards')!;
+    expect(heroGroup.visible).toBe(true);
+    expect(heroGroup.children[0]!.visible).toBe(false);
+    expect(heroGroup.children[1]!.visible).toBe(false);
+
+    // Hero's 1st card is index 2 in deal order (startDelay = 2*35 = 70ms, end = 240ms).
+    // Hero's 2nd card is index 6 in deal order (startDelay = 6*35 = 210ms, end = 380ms).
+    // At elapsed = 260ms: Hero's 1st card MUST be settled and visible while 2nd card is still flying!
+    rig.stepAnimations?.(1260);
+    expect(heroGroup.visible).toBe(true);
+    expect(heroGroup.children[0]!.visible).toBe(true);
+    expect(heroGroup.children[1]!.visible).toBe(false);
+    expect(animFx.children[6]!.visible).toBe(true);
+  });
+
+  it('disposes reveal meshes/textures and bubble textures/materials on between-hands transition and guards status=out reveals', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { buildTabletop } = await import('../../../src/ui/drill3d/scene/buildTabletop');
+
+    // Guard showdown-reveal against synthetic status === 'out' with non-null revealedCards
+    const prevActive = makeLiveSnapshot({
+      live: {
+        timelineLength: 8,
+        seats: [
+          makeSeat('hero'),
+          makeSeat('ca', { status: 'out', stackChips: emptyChips(), revealedCards: null }),
+          makeSeat('cao'),
+          makeSeat('nong'),
+        ],
+      },
+    });
+    const nextOutReveal = makeLiveSnapshot({
+      live: {
+        timelineLength: 9,
+        seats: [
+          makeSeat('hero'),
+          makeSeat('ca', { status: 'out', stackChips: emptyChips(), revealedCards: ['A♠', 'K♠'] }),
+          makeSeat('cao'),
+          makeSeat('nong'),
+        ],
+      },
+    });
+    const outPlan = planTableAnimations(prevActive, nextOutReveal, false);
+    expect(outPlan.animations.some((a) => a.type === 'showdown-reveal')).toBe(false);
+
+    // Build showdown state with Cáo revealed cards + action bubble
+    const showdownSnap = makeLiveSnapshot({
+      pot: 0,
+      board: ['K♥', '8♦', '5♣', '2♠', '9♥'],
+      live: {
+        handNumber: 1,
+        timelineLength: 16,
+        street: 'river',
+        potChips: emptyChips(),
+        seats: [
+          makeSeat('hero', { revealedCards: ['A♥', 'K♦'] }),
+          makeSeat('ca', { status: 'folded' }),
+          makeSeat('cao', {
+            status: 'active',
+            isWinner: true,
+            lastAction: { type: 'call', amount: 35 },
+            revealedCards: ['Q♠', 'Q♣'],
+          }),
+          makeSeat('nong', { status: 'folded' }),
+        ],
+        payoutTransfers: [{ seatId: 'cao', chips: makeChips({ 10: 5 }) }],
+      },
+    });
+
+    const rig = buildTabletop(showdownSnap);
+    const caoCards = rig.root.getObjectByName('RivalCards-cao')!;
+    expect(caoCards.children).toHaveLength(2);
+    const caoFaceTex = (
+      (caoCards.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial[]
+    )[2]!.map!;
+    const caoFaceDispose = vi.spyOn(caoFaceTex, 'dispose');
+
+    const caoBubble = rig.root.getObjectByName('SeatBubble-cao') as THREE.Sprite;
+    expect(caoBubble).toBeDefined();
+    const bubbleMapDispose = vi.spyOn(caoBubble.material.map!, 'dispose');
+    const bubbleMatDispose = vi.spyOn(caoBubble.material, 'dispose');
+
+    // Enter between-hands snapshot: reveal meshes and bubble must be removed and disposed
+    const betweenHandsSnap = makeLiveSnapshot({
+      pot: 0,
+      heroCards: [],
+      board: [],
+      live: {
+        handNumber: 1,
+        timelineLength: 0,
+        dealerSeatId: null,
+        street: null,
+        potChips: emptyChips(),
+        seats: makeDefaultSeats(),
+        payoutTransfers: [],
+      },
+    });
+    rig.updateSpot(betweenHandsSnap);
+
+    expect(caoFaceDispose).toHaveBeenCalledOnce();
+    expect(bubbleMapDispose).toHaveBeenCalledOnce();
+    expect(bubbleMatDispose).toHaveBeenCalledOnce();
+    expect(caoCards.children).toHaveLength(0);
+    expect(rig.root.getObjectByName('SeatBubble-cao')).toBeUndefined();
+  });
+
+  it('keeps the Drill pot completely unoccluded in Arrival, Decision, and Review and action bubbles readable at 390x844', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const THREE = await import('three');
+    const { buildTabletop, SEAT_LAYOUTS, TABLETOP_METRICS } = await import(
+      '../../../src/ui/drill3d/scene/buildTabletop'
+    );
+    const { CAMERA_PRESETS } = await import('../../../src/ui/drill3d/scene/sceneController');
+
+    const rig = buildTabletop(DEMO_SPOT);
+    rig.root.updateMatrixWorld(true);
+    const heroCards = rig.root.getObjectByName('HeroCards')!;
+    const raycaster = new THREE.Raycaster();
+
+    const makeCamera = (phase: 'arrival' | 'decision' | 'review', w: number, h: number) => {
+      const preset = CAMERA_PRESETS[phase];
+      const aspect = w / h;
+      const minHRad = THREE.MathUtils.degToRad(preset.minHFov);
+      const vDeg = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(minHRad / 2) / aspect));
+      const fov = Math.min(60, Math.max(preset.baseFov, vDeg));
+      const cam = new THREE.PerspectiveCamera(fov, aspect, 0.1, 32);
+      cam.position.set(preset.position[0], preset.position[1], preset.position[2]);
+      cam.lookAt(preset.target[0], preset.target[1], preset.target[2]);
+      cam.updateMatrixWorld(true);
+      cam.updateProjectionMatrix();
+      return cam;
+    };
+
+    // Sample 96 surface points across the 2-column Drill Pot 150 pile across all 3 cameras
+    for (const phase of ['arrival', 'decision', 'review'] as const) {
+      const cam = makeCamera(phase, 892, 670);
+      let occluded = 0;
+      for (const cx of [-0.08, 0.08]) {
+        for (const y of [0.005, 0.015, 0.022]) {
+          for (let a = 0; a < 16; a += 1) {
+            const theta = (a / 16) * Math.PI * 2;
+            const pt = new THREE.Vector3(
+              TABLETOP_METRICS.potPos.x + cx + Math.cos(theta) * 0.072,
+              y,
+              TABLETOP_METRICS.potPos.z + Math.sin(theta) * 0.072,
+            );
+            const dir = pt.clone().sub(cam.position);
+            const dist = dir.length();
+            raycaster.set(cam.position, dir.normalize());
+            const hits = raycaster.intersectObjects(heroCards.children, true);
+            if (hits.some((h) => h.distance < dist - 0.001)) {
+              occluded += 1;
+            }
+          }
+        }
+      }
+      expect(occluded).toBe(0);
+    }
+
+    // Mobile 390x844 (364x310 canvas) live decision camera: every seat action bubble cap height >= 9 CSS px
+    const mobileW = 364;
+    const mobileH = 310;
+    const mobileCam = makeCamera('decision', mobileW, mobileH);
+    const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(mobileCam.quaternion);
+    const projectY = (v: THREE.Vector3) => (-v.clone().project(mobileCam).y * 0.5 + 0.5) * mobileH;
+
+    for (const seatId of ALL_SEAT_IDS) {
+      const pos = SEAT_LAYOUTS[seatId].bubblePos;
+      const center = new THREE.Vector3(pos[0], pos[1], pos[2]);
+      const halfH = TABLETOP_METRICS.bubbleScale.y / 2;
+      const topY = projectY(center.clone().addScaledVector(camUp, halfH));
+      const botY = projectY(center.clone().addScaledVector(camUp, -halfH));
+      const spriteCssPx = Math.abs(botY - topY);
+      const capHeightNormalPx =
+        spriteCssPx * ((ACTION_BUBBLE_CANVAS.fontSizeNormal * 0.72) / ACTION_BUBBLE_CANVAS.height);
+      const capHeightLongPx =
+        spriteCssPx * ((ACTION_BUBBLE_CANVAS.fontSizeLong * 0.72) / ACTION_BUBBLE_CANVAS.height);
+      expect(capHeightNormalPx).toBeGreaterThanOrEqual(9);
+      expect(capHeightLongPx).toBeGreaterThanOrEqual(9);
+    }
   });
 });

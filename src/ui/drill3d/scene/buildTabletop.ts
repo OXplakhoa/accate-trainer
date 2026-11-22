@@ -23,7 +23,15 @@ import {
   shouldShowOuts,
   shouldShowRiverPlaceholder,
 } from './snapshot';
-import { getPlanDurationMs, type TableAnimation } from './tableMotion';
+import {
+  computeRestingChipAllocation,
+  computeTableChipAllocation,
+  getLiveEventKey,
+  getPlanDurationMs,
+  isChipPlanReconcilable,
+  type TableAnimation,
+  type TableChipAllocation,
+} from './tableMotion';
 import {
   createCardBackTexture,
   createCardFaceTexture,
@@ -59,10 +67,12 @@ const BOARD_Z = -0.26;
 const BOARD_Y = 0.044;
 const BOARD_TILT_X = 0.14;
 
-// Pot placed left-center below the board and Hero cards pushed slightly forward with gentler tilt so Pot is never occluded
-const POT_POS = { x: -0.48, z: 0.3 } as const;
+// Pot placed left-center clear of board and Hero cards across Arrival, Decision, and Review cameras
+const POT_POS = { x: -0.58, z: 0.26 } as const;
 const CALL_POS = { x: 0.6, z: 0.56 } as const;
-const DEAL_ORIGIN = { x: 0.0, y: 0.06, z: -0.72 } as const;
+const FALLBACK_DEAL_ORIGIN: readonly [number, number, number] = [0.0, 0.06, -0.72];
+
+export const ACTION_BUBBLE_SCALE = { x: 1.28, y: 0.37 } as const;
 
 const HERO_CARD_OFFSETS: readonly { readonly x: number; readonly z: number; readonly rotY: number }[] = [
   { x: -0.175, z: 0.96, rotY: 0.065 },
@@ -80,6 +90,7 @@ interface SeatLayout {
   readonly cardPos: readonly [number, number, number];
   readonly cardRotY: number;
   readonly muckPos: readonly [number, number, number];
+  readonly dealOrigin: readonly [number, number, number];
   readonly stackPos: readonly [number, number];
   readonly betPos: readonly [number, number];
   readonly actorRingPos: readonly [number, number];
@@ -93,46 +104,56 @@ export const SEAT_LAYOUTS: Readonly<Record<TableSeatId, SeatLayout>> = {
     cardPos: [-1.28, 0.005, -0.68],
     cardRotY: 0.92,
     muckPos: [-1.14, 0.005, -0.52],
+    dealOrigin: [-1.02, 0.06, -0.44],
     stackPos: [-1.54, -0.22],
     betPos: [-1.14, 0.08],
     actorRingPos: [-1.28, -0.68],
     actorRingScale: [1.18, 0.88],
-    bubblePos: [-1.24, 0.42, -0.62],
+    bubblePos: [-1.24, 0.48, -0.62],
   },
   cao: {
     id: 'cao',
     cardPos: [0.0, 0.005, -0.96],
     cardRotY: 0.0,
     muckPos: [0.0, 0.005, -0.76],
+    dealOrigin: [0.0, 0.06, -0.72],
     stackPos: [0.58, -0.94],
     betPos: [-0.46, -0.78],
     actorRingPos: [0.0, -0.96],
     actorRingScale: [1.18, 0.88],
-    bubblePos: [0.0, 0.44, -0.9],
+    bubblePos: [0.0, 0.5, -0.9],
   },
   nong: {
     id: 'nong',
     cardPos: [1.28, 0.005, -0.68],
     cardRotY: -0.92,
     muckPos: [1.14, 0.005, -0.52],
+    dealOrigin: [1.02, 0.06, -0.44],
     stackPos: [1.54, -0.22],
     betPos: [1.14, 0.08],
     actorRingPos: [1.28, -0.68],
     actorRingScale: [1.18, 0.88],
-    bubblePos: [1.24, 0.42, -0.62],
+    bubblePos: [1.24, 0.48, -0.62],
   },
   hero: {
     id: 'hero',
     cardPos: [0.0, HERO_CARD_Y, 0.96],
     cardRotY: 0.0,
     muckPos: [0.0, HERO_CARD_Y + HERO_FOLD_OFFSET.y, 0.96 + HERO_FOLD_OFFSET.z],
+    dealOrigin: [0.0, 0.06, 0.62],
     stackPos: [-0.94, 0.76],
     betPos: [0.38, 0.56],
     actorRingPos: [0.0, 0.92],
     actorRingScale: [1.62, 0.92],
-    bubblePos: [0.46, 0.34, 0.68],
+    bubblePos: [0.46, 0.38, 0.68],
   },
 };
+
+export function getDealOrigin(
+  dealerSeatId: TableSeatId | null | undefined,
+): readonly [number, number, number] {
+  return dealerSeatId ? SEAT_LAYOUTS[dealerSeatId].dealOrigin : FALLBACK_DEAL_ORIGIN;
+}
 
 export const TABLETOP_METRICS = {
   boardCardScale: BOARD_CARD_SCALE,
@@ -142,6 +163,9 @@ export const TABLETOP_METRICS = {
   potPos: POT_POS,
   callPos: CALL_POS,
   heroCardZ: HERO_CARD_OFFSETS[0]!.z,
+  heroCardY: HERO_CARD_Y,
+  heroCardTiltX: HERO_CARD_TILT_X,
+  bubbleScale: ACTION_BUBBLE_SCALE,
 } as const;
 
 function easeOutCubic(t: number): number {
@@ -198,22 +222,30 @@ function createCardMesh(
   return mesh;
 }
 
-function setGroupOpacity(group: THREE.Object3D, opacity: number): void {
+/** Zero-allocation recursive opacity setter for fold-seat interpolation. */
+function setObjectOpacity(obj: THREE.Object3D, opacity: number): void {
   const transparent = opacity < 0.999;
-  group.traverse((obj) => {
-    const mesh = obj as THREE.Mesh;
-    if (!mesh.isMesh) {
-      return;
-    }
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const mat of mats) {
-      if (mat && 'opacity' in mat) {
-        const std = mat as THREE.MeshStandardMaterial;
-        std.transparent = transparent;
-        std.opacity = opacity;
+  const mesh = obj as THREE.Mesh;
+  if (mesh.isMesh) {
+    const matOrList = mesh.material;
+    if (Array.isArray(matOrList)) {
+      for (let i = 0; i < matOrList.length; i += 1) {
+        const mat = matOrList[i] as THREE.MeshStandardMaterial | undefined;
+        if (mat && 'opacity' in mat) {
+          mat.transparent = transparent;
+          mat.opacity = opacity;
+        }
       }
+    } else if (matOrList && 'opacity' in matOrList) {
+      const mat = matOrList as THREE.MeshStandardMaterial;
+      mat.transparent = transparent;
+      mat.opacity = opacity;
     }
-  });
+  }
+  const children = obj.children;
+  for (let i = 0; i < children.length; i += 1) {
+    setObjectOpacity(children[i]!, opacity);
+  }
 }
 
 function createHeartOutlineFrame(): THREE.Mesh {
@@ -305,7 +337,6 @@ function buildChipStackMesh(
 
   for (let i = 0; i < count; i += 1) {
     const chip = new THREE.Mesh(chipGeo, [edgeMat, topMat, topMat]);
-    // Slight deterministic offset so the stack looks organically hand-stacked
     const jitterX = Math.sin(i * 2.3 + x * 5) * 0.003;
     const jitterZ = Math.cos(i * 1.9 + z * 5) * 0.003;
     chip.position.set(jitterX, CHIP_HEIGHT * 0.5 + i * CHIP_HEIGHT, jitterZ);
@@ -358,31 +389,51 @@ export function createChipPile(chips: ChipCounts, options: ChipPileOptions = {})
   return group;
 }
 
+interface DealCardFlight {
+  readonly mesh: THREE.Mesh;
+  readonly targetCardObj: THREE.Object3D | null;
+  readonly seatId: TableSeatId;
+  readonly cardSlotIdx: number;
+  readonly startDelayMs: number;
+  readonly endMs: number;
+  readonly durationMs: number;
+  readonly originPos: readonly [number, number, number];
+  readonly endPos: readonly [number, number, number];
+  readonly endRotY: number;
+}
+
+interface BoardCardFlight {
+  readonly holder: THREE.Group;
+  readonly originPos: readonly [number, number, number];
+  readonly targetX: number;
+  readonly startDelayMs: number;
+  readonly endMs: number;
+  readonly durationMs: number;
+}
+
+interface ChipFlight {
+  readonly group: THREE.Group;
+  readonly baseScale: number;
+  readonly startDelayMs: number;
+  readonly endMs: number;
+  readonly durationMs: number;
+  readonly startPos: readonly [number, number, number];
+  readonly endPos: readonly [number, number, number];
+  readonly arcHeight: number;
+  readonly shrinkAtEnd: boolean;
+  /** -1 = uninitialized, 0 = pending, 1 = flying, 2 = landed */
+  phase: number;
+}
+
 interface ActiveAnimationRun {
+  readonly eventKey: string;
   readonly startTimeMs: number;
   readonly totalDurationMs: number;
   readonly animations: readonly TableAnimation[];
-  readonly dealFlyingCards: readonly {
-    readonly mesh: THREE.Mesh;
-    readonly seatId: TableSeatId;
-    readonly cardSlotIdx: number;
-    readonly startDelayMs: number;
-    readonly durationMs: number;
-    readonly endPos: readonly [number, number, number];
-    readonly endRotY: number;
-  }[];
-  readonly chipFlights: readonly {
-    readonly group: THREE.Group;
-    readonly startDelayMs: number;
-    readonly durationMs: number;
-    readonly startPos: readonly [number, number, number];
-    readonly endPos: readonly [number, number, number];
-    readonly arcHeight: number;
-    readonly shrinkAtEnd: boolean;
-    readonly targetBetSeatId?: TableSeatId;
-  }[];
-  readonly hiddenBetSeats: ReadonlySet<TableSeatId>;
-  readonly dealtSeats: ReadonlySet<TableSeatId>;
+  readonly dealFlyingCards: readonly DealCardFlight[];
+  readonly boardCardFlights: readonly BoardCardFlight[];
+  readonly chipFlights: readonly ChipFlight[];
+  lastElapsedMs: number;
 }
 
 export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
@@ -393,7 +444,8 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
   const sharedTextures = new Set<THREE.Texture>([cardBackTex]);
 
   const clearGroup = (group: THREE.Group) => {
-    for (const child of [...group.children]) {
+    for (let i = group.children.length - 1; i >= 0; i -= 1) {
+      const child = group.children[i]!;
       disposeObject3DResources(child, sharedTextures);
       group.remove(child);
     }
@@ -425,7 +477,12 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
   const seatBetGroups = {} as Record<TableSeatId, THREE.Group>;
   const seatActorRings = {} as Record<TableSeatId, THREE.Mesh>;
   const seatWinnerRings = {} as Record<TableSeatId, THREE.Mesh>;
-  const seatBubbles = {} as Record<TableSeatId, THREE.Sprite>;
+  const seatBubbles: Record<TableSeatId, THREE.Sprite | null> = {
+    hero: null,
+    ca: null,
+    cao: null,
+    nong: null,
+  };
   const seatStackKeys: Record<TableSeatId, string> = { hero: '', ca: '', cao: '', nong: '' };
   const seatBetKeys: Record<TableSeatId, string> = { hero: '', ca: '', cao: '', nong: '' };
   const seatBubbleKeys: Record<TableSeatId, string> = { hero: '', ca: '', cao: '', nong: '' };
@@ -472,19 +529,6 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     winnerRing.rotation.y = layout.cardRotY;
     liveSeatsRoot.add(winnerRing);
     seatWinnerRings[seatId] = winnerRing;
-
-    const bubbleMat = new THREE.SpriteMaterial({
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-    });
-    const bubble = new THREE.Sprite(bubbleMat);
-    bubble.name = `SeatBubble-${seatId}`;
-    bubble.position.set(layout.bubblePos[0], layout.bubblePos[1], layout.bubblePos[2]);
-    bubble.scale.set(0.68, 0.19, 1);
-    bubble.visible = false;
-    liveSeatsRoot.add(bubble);
-    seatBubbles[seatId] = bubble;
   }
 
   // Decorative fixture seat chip stacks + dealer puck (shown in Drill fixture mode only; hidden in live mode)
@@ -548,23 +592,19 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
   root.add(riverSlot);
 
   // --- Highlight Rings & Visual Indicators (Drill lessons + Pot halo) ---
-  // 1. Pot center halo (surrounds POT_POS, unoccluded by Hero cards)
   const potRing = createHighlightRing(0.34, 0.4, SCENE_COLORS.highlightPot, 1.24, 0.96);
   potRing.position.set(POT_POS.x, 0.006, POT_POS.z);
   root.add(potRing);
 
-  // 2. Hero Call zone halo (Drill mode: surrounds CALL_POS)
   const callRing = createHighlightRing(0.22, 0.275, SCENE_COLORS.highlightCall, 1.15, 1.0);
   callRing.position.set(CALL_POS.x, 0.006, CALL_POS.z);
   root.add(callRing);
 
-  // 3. Total pot after call unified halo (Drill mode: encompasses BOTH Pot + Call together)
-  const totalRing = createHighlightRing(0.82, 0.89, SCENE_COLORS.highlightTotal, 1.18, 0.62);
+  const totalRing = createHighlightRing(0.82, 0.89, SCENE_COLORS.highlightTotal, 1.24, 0.62);
   totalRing.position.set((POT_POS.x + CALL_POS.x) / 2, 0.0055, (POT_POS.z + CALL_POS.z) / 2);
   totalRing.rotation.y = -0.24;
   root.add(totalRing);
 
-  // 4. River Outs halo under the open River slot
   const riverOutsRing = createHighlightRing(
     0.22 * BOARD_CARD_SCALE,
     0.27 * BOARD_CARD_SCALE,
@@ -608,11 +648,108 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
   let seenHeartFrames: THREE.Mesh[] = [];
   let currentHighlight: LessonHighlight = null;
   let currentSpot: SceneTableSnapshot = initialSpot;
-  let currentCardsAndChipsKey = '';
+  let currentCardsKey = '';
+  let potChipsKey = '';
   let activeRun: ActiveAnimationRun | null = null;
 
   const findLiveSeat = (spot: SceneTableSnapshot, seatId: TableSeatId): PublicTableSeat | undefined =>
     spot.live?.seats.find((s) => s.id === seatId);
+
+  const setCenterPotChips = (chips: ChipCounts) => {
+    const nextKey = countTotalChips(chips) > 0 ? serializeChipCounts(chips) : 'empty';
+    if (potChipsKey === nextKey) {
+      return;
+    }
+    clearGroup(potChipsGroup);
+    if (nextKey !== 'empty') {
+      potChipsGroup.add(createChipPile(chips));
+    }
+    potChipsKey = nextKey;
+  };
+
+  const applyLiveChipAllocation = (allocation: TableChipAllocation) => {
+    setCenterPotChips(allocation.centerPot);
+
+    for (let i = 0; i < ALL_TABLE_SEATS.length; i += 1) {
+      const seatId = ALL_TABLE_SEATS[i]!;
+
+      const stackChips = allocation.seatStacks[seatId];
+      const nextStackKey = countTotalChips(stackChips) > 0 ? serializeChipCounts(stackChips) : 'empty';
+      if (seatStackKeys[seatId] !== nextStackKey) {
+        const stackGroup = seatStackGroups[seatId];
+        clearGroup(stackGroup);
+        if (nextStackKey !== 'empty') {
+          stackGroup.add(createChipPile(stackChips, { maxPerColumn: 16, scale: 0.76 }));
+        }
+        seatStackKeys[seatId] = nextStackKey;
+      }
+
+      const betChips = allocation.seatBets[seatId];
+      const nextBetKey = countTotalChips(betChips) > 0 ? serializeChipCounts(betChips) : 'empty';
+      const betGroup = seatBetGroups[seatId];
+      if (seatBetKeys[seatId] !== nextBetKey) {
+        clearGroup(betGroup);
+        if (nextBetKey !== 'empty') {
+          betGroup.add(createChipPile(betChips, { scale: 0.88 }));
+        }
+        seatBetKeys[seatId] = nextBetKey;
+      }
+      betGroup.visible = true;
+    }
+  };
+
+  const clearSeatBubble = (seatId: TableSeatId) => {
+    const existing = seatBubbles[seatId];
+    if (existing) {
+      const mat = existing.material;
+      if (mat.map) {
+        mat.map.dispose();
+        mat.map = null;
+      }
+      mat.dispose();
+      liveSeatsRoot.remove(existing);
+      seatBubbles[seatId] = null;
+    }
+    seatBubbleKeys[seatId] = '';
+  };
+
+  const updateSeatBubble = (seatId: TableSeatId, seat: PublicTableSeat | undefined, showLive: boolean) => {
+    const spec = showLive && seat ? formatSeatActionBubble(seat) : null;
+    if (!spec) {
+      clearSeatBubble(seatId);
+      return;
+    }
+
+    const nextKey = `${spec.tone}:${spec.label}`;
+    let sprite = seatBubbles[seatId];
+    if (!sprite) {
+      const layout = SEAT_LAYOUTS[seatId];
+      const bubbleMat = new THREE.SpriteMaterial({
+        map: createActionBubbleTexture(spec),
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      });
+      sprite = new THREE.Sprite(bubbleMat);
+      sprite.name = `SeatBubble-${seatId}`;
+      sprite.position.set(layout.bubblePos[0], layout.bubblePos[1], layout.bubblePos[2]);
+      sprite.scale.set(ACTION_BUBBLE_SCALE.x, ACTION_BUBBLE_SCALE.y, 1);
+      liveSeatsRoot.add(sprite);
+      seatBubbles[seatId] = sprite;
+      seatBubbleKeys[seatId] = nextKey;
+      return;
+    }
+
+    if (seatBubbleKeys[seatId] !== nextKey) {
+      const mat = sprite.material;
+      const prevMap = mat.map;
+      mat.map = createActionBubbleTexture(spec);
+      mat.needsUpdate = true;
+      prevMap?.dispose();
+      seatBubbleKeys[seatId] = nextKey;
+    }
+    sprite.visible = true;
+  };
 
   const rebuildRivalCards = (
     rival: SceneRival,
@@ -663,14 +800,15 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     const isLive = isLiveSnapshot(currentSpot);
 
     // Restore board cards to resting grid positions
-    boardCardHolders.forEach((holder, idx) => {
+    for (let idx = 0; idx < boardCardHolders.length; idx += 1) {
+      const holder = boardCardHolders[idx]!;
       const bx = BOARD_XS[idx] ?? riverSlotX;
       holder.visible = true;
       holder.position.set(bx, BOARD_Y, BOARD_Z);
       holder.rotation.set(BOARD_TILT_X, 0, 0);
-    });
+    }
 
-    // Restore Hero card group resting transform & opacity
+    // Restore Hero card group & per-card resting transform & opacity
     const heroSeat = findLiveSeat(currentSpot, 'hero');
     const heroFolded = isLive && heroSeat?.status === 'folded';
     heroCardsGroup.visible = !isLive || (heroSeat?.status !== 'out' && currentSpot.heroCards.length > 0);
@@ -679,10 +817,14 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       heroFolded ? HERO_FOLD_OFFSET.y : 0,
       heroFolded ? HERO_FOLD_OFFSET.z : 0,
     );
-    setGroupOpacity(heroCardsGroup, heroFolded ? FOLDED_CARD_OPACITY : 1);
+    for (let i = 0; i < heroCardsGroup.children.length; i += 1) {
+      heroCardsGroup.children[i]!.visible = true;
+    }
+    setObjectOpacity(heroCardsGroup, heroFolded ? FOLDED_CARD_OPACITY : 1);
 
-    // Restore rival card groups resting transform, flip & opacity
-    for (const rival of ALL_SCENE_RIVALS) {
+    // Restore rival card groups resting transform, per-card visibility, flip & opacity
+    for (let rIdx = 0; rIdx < ALL_SCENE_RIVALS.length; rIdx += 1) {
+      const rival = ALL_SCENE_RIVALS[rIdx]!;
       const pair = rivalCardGroups[rival];
       const layout = SEAT_LAYOUTS[rival];
       const seat = findLiveSeat(currentSpot, rival);
@@ -696,9 +838,11 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       const pos = isFolded ? layout.muckPos : layout.cardPos;
       pair.position.set(pos[0], pos[1], pos[2]);
       pair.rotation.set(0, layout.cardRotY, 0);
-      setGroupOpacity(pair, isFolded ? FOLDED_CARD_OPACITY : 1);
+      setObjectOpacity(pair, isFolded ? FOLDED_CARD_OPACITY : 1);
 
-      pair.children.forEach((child, i) => {
+      for (let i = 0; i < pair.children.length; i += 1) {
+        const child = pair.children[i]!;
+        child.visible = true;
         if (child.userData.cardKind === 'revealed') {
           child.position.set(i === 0 ? -0.145 : 0.145, 0.025 + i * 0.003, 0);
           child.rotation.set(0.16, i === 0 ? 0.08 : -0.08, 0);
@@ -706,11 +850,16 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
           child.position.set(i === 0 ? -0.075 : 0.075, i * 0.003, i === 0 ? 0.01 : -0.01);
           child.rotation.set(0, i === 0 ? 0.14 : -0.14, 0);
         }
-      });
+      }
     }
 
-    // Restore bet pile visibility & winner ring resting scale/opacity
-    for (const seatId of ALL_TABLE_SEATS) {
+    // Restore resting stationary chips in live mode and winner ring resting scale/opacity
+    if (isLive && currentSpot.live) {
+      applyLiveChipAllocation(computeRestingChipAllocation(currentSpot.live));
+    }
+
+    for (let i = 0; i < ALL_TABLE_SEATS.length; i += 1) {
+      const seatId = ALL_TABLE_SEATS[i]!;
       seatBetGroups[seatId].visible = isLive;
       const layout = SEAT_LAYOUTS[seatId];
       const winnerRing = seatWinnerRings[seatId];
@@ -728,26 +877,6 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     restoreRestingTransforms();
   };
 
-  const updateSeatBubble = (seatId: TableSeatId, seat: PublicTableSeat | undefined, showLive: boolean) => {
-    const sprite = seatBubbles[seatId];
-    const spec = showLive && seat ? formatSeatActionBubble(seat) : null;
-    if (!spec) {
-      sprite.visible = false;
-      return;
-    }
-
-    const nextKey = `${spec.tone}:${spec.label}`;
-    if (seatBubbleKeys[seatId] !== nextKey) {
-      const mat = sprite.material;
-      const prevMap = mat.map;
-      mat.map = createActionBubbleTexture(spec);
-      mat.needsUpdate = true;
-      prevMap?.dispose();
-      seatBubbleKeys[seatId] = nextKey;
-    }
-    sprite.visible = true;
-  };
-
   const applyHighlightState = (highlight: LessonHighlight) => {
     currentHighlight = highlight;
     const isLive = isLiveSnapshot(currentSpot);
@@ -760,22 +889,34 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     riverOutsRing.visible = showOuts;
     outsFanGroup.visible = showOuts;
 
-    // Subtle elevation lift on highlighted chip clusters for instant tactile feedback
     potChipsGroup.position.y = effective === 'pot' || effective === 'total' ? 0.032 : 0;
     callChipsGroup.position.y = !isLive && (effective === 'call' || effective === 'total') ? 0.036 : 0;
 
-    // Emphasize the seen heart cards slightly when showing the flush draw outs in Drill mode
-    for (const frame of seenHeartFrames) {
-      frame.visible = showOuts;
+    for (let i = 0; i < seenHeartFrames.length; i += 1) {
+      seenHeartFrames[i]!.visible = showOuts;
     }
   };
 
-  const updateLiveSeats = (spot: SceneTableSnapshot) => {
+  const updateLiveSeats = (spot: SceneTableSnapshot, preserveFlightChips: boolean) => {
     const isLive = isLiveSnapshot(spot);
     liveSeatsRoot.visible = isLive;
 
     if (!isLive || !spot.live) {
-      // Drill mode: ensure all 3 rivals show face-down cards and zero live overlays
+      // Drill mode: dispose any live bubbles/stacks/bets and ensure all 3 rivals show face-down cards
+      for (let i = 0; i < ALL_TABLE_SEATS.length; i += 1) {
+        const seatId = ALL_TABLE_SEATS[i]!;
+        clearSeatBubble(seatId);
+        if (seatStackKeys[seatId] !== '') {
+          clearGroup(seatStackGroups[seatId]);
+          seatStackKeys[seatId] = '';
+        }
+        if (seatBetKeys[seatId] !== '') {
+          clearGroup(seatBetGroups[seatId]);
+          seatBetKeys[seatId] = '';
+        }
+        seatActorRings[seatId].visible = false;
+        seatWinnerRings[seatId].visible = false;
+      }
       for (const rival of ALL_SCENE_RIVALS) {
         if (rivalCardKeys[rival] !== 'drill:face-down') {
           rebuildRivalCards(rival, 'face-down', null);
@@ -789,12 +930,15 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     const live = spot.live;
     const occupiedSet = new Set<SceneRival>(getOccupiedRivals(spot));
     const inHand = live.street !== null;
-    const handSettled = live.payoutTransfers.length > 0;
 
-    // Update rival cards (strictly face-down unless seat.revealedCards is non-null)
+    // Update rival cards (strictly face-down unless seat.revealedCards is non-null; dispose when hidden/out/idle)
     for (const rival of ALL_SCENE_RIVALS) {
       const seat = findLiveSeat(spot, rival);
       if (!inHand || (seat ? seat.status === 'out' : !occupiedSet.has(rival))) {
+        if (rivalCardGroups[rival].children.length > 0 || rivalCardKeys[rival] !== '') {
+          clearGroup(rivalCardGroups[rival]);
+          rivalCardKeys[rival] = '';
+        }
         rivalCardGroups[rival].visible = false;
         continue;
       }
@@ -823,44 +967,22 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       rivalCardGroups[rival].visible = true;
     }
 
-    // Update per-seat stacks, bets, actor glow, winner highlight, and action bubble
+    // Update stationary chip piles (conserving chips: centerPot = potChips - Σ streetChips,
+    // or preserving mid-flight withheld piles on same-key updates)
+    if (!preserveFlightChips) {
+      applyLiveChipAllocation(computeRestingChipAllocation(live));
+    }
+
+    // Update actor glow, winner highlight, and action bubble per seat
     for (const seatId of ALL_TABLE_SEATS) {
       const seat = findLiveSeat(spot, seatId);
 
-      // 1. Physical stack pile near seat's rail (real denominations only, compact columns)
-      const stackGroup = seatStackGroups[seatId];
-      const nextStackKey = seat ? serializeChipCounts(seat.stackChips) : 'empty';
-      if (seatStackKeys[seatId] !== nextStackKey) {
-        clearGroup(stackGroup);
-        if (seat && countTotalChips(seat.stackChips) > 0) {
-          stackGroup.add(createChipPile(seat.stackChips, { maxPerColumn: 16, scale: 0.76 }));
-        }
-        seatStackKeys[seatId] = nextStackKey;
-      }
-
-      // 2. Physical bet pile between seat and pot (hidden between hands or after payout settlement)
-      const betGroup = seatBetGroups[seatId];
-      const showBet = inHand && !handSettled && seat !== undefined && countTotalChips(seat.streetChips) > 0;
-      const nextBetKey = showBet && seat ? serializeChipCounts(seat.streetChips) : 'empty';
-      if (seatBetKeys[seatId] !== nextBetKey) {
-        clearGroup(betGroup);
-        if (showBet && seat) {
-          betGroup.add(createChipPile(seat.streetChips, { scale: 0.88 }));
-        }
-        seatBetKeys[seatId] = nextBetKey;
-      }
-      betGroup.visible = true;
-
-      // 3. Actor glow on felt
       const isActor = seat
         ? seat.isActor
         : seatId !== 'hero' && live.activeRival === seatId && occupiedSet.has(seatId);
       seatActorRings[seatId].visible = inHand && isActor;
-
-      // 4. Winner highlight ring
       seatWinnerRings[seatId].visible = inHand && Boolean(seat?.isWinner);
 
-      // 5. Action bubble billboard
       updateSeatBubble(seatId, seat, inHand);
     }
   };
@@ -869,34 +991,55 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     currentSpot = spot;
     const isLive = isLiveSnapshot(spot);
 
-    // Toggle Drill-only seat props, Call pile, and River placeholder
+    // Same-key update during an active flight: keep mid-flight chip & card state intact
+    let preserveFlightState = false;
+    if (activeRun !== null) {
+      if (isLive && spot.live && getLiveEventKey(spot.live) === activeRun.eventKey) {
+        const midAllocation = computeTableChipAllocation(
+          spot.live,
+          activeRun.animations,
+          activeRun.lastElapsedMs,
+        );
+        if (midAllocation.reconcilable) {
+          preserveFlightState = true;
+          applyLiveChipAllocation(midAllocation);
+        } else {
+          snapAnimations();
+        }
+      } else {
+        snapAnimations();
+      }
+    }
+
     fixtureSeatPropsGroup.visible = !isLive;
     callChipsGroup.visible = !isLive;
     riverSlot.visible = shouldShowRiverPlaceholder(spot);
 
-    updateLiveSeats(spot);
+    updateLiveSeats(spot, preserveFlightState);
+
+    // Drill pot pile (live pot pile is managed by applyLiveChipAllocation)
+    if (!isLive) {
+      setCenterPotChips(chipsForAmount(spot.pot));
+    }
 
     const heroSeat = findLiveSeat(spot, 'hero');
     const heroStatus = isLive ? (heroSeat?.status ?? 'active') : 'active';
-    const cardsAndChipsKey = [
+    const cardsKey = [
       isLive ? 'L' : 'D',
-      String(spot.pot),
-      spot.live ? serializeChipCounts(spot.live.potChips) : 'drill',
       isLive ? '0' : String(spot.call),
       heroStatus,
       spot.heroCards.join(','),
       spot.board.join(','),
     ].join(':');
 
-    if (cardsAndChipsKey === currentCardsAndChipsKey) {
+    if (cardsKey === currentCardsKey) {
       applyHighlightState(currentHighlight);
       return;
     }
-    currentCardsAndChipsKey = cardsAndChipsKey;
+    currentCardsKey = cardsKey;
 
     clearGroup(boardGroup);
     clearGroup(heroCardsGroup);
-    clearGroup(potChipsGroup);
     clearGroup(callChipsGroup);
     clearGroup(outsFanGroup);
     boardCardHolders = [];
@@ -965,27 +1108,20 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       });
     }
 
-    // 3. Real pot counts in live mode; hypothetical Drill amounts in Drill mode
-    const potChips = spot.live ? spot.live.potChips : chipsForAmount(spot.pot);
-    if (countTotalChips(potChips) > 0) {
-      potChipsGroup.add(createChipPile(potChips));
-    }
-
-    // 4. Hypothetical Call pile strictly in Drill mode
+    // 3. Hypothetical Call pile strictly in Drill mode
     if (!isLive && spot.call > 0) {
       callChipsGroup.add(createChipPile(chipsForAmount(spot.call)));
     }
 
-    // 5. Ghostly Unseen Heart Outs Fan (Drill mode only — live mode shows no assumption ghost outs)
+    // 4. Ghostly Unseen Heart Outs Fan (Drill mode only — live mode shows no assumption ghost outs)
     if (!isLive) {
       const unseenHearts = getUnseenHearts(spot);
       const total = unseenHearts.length;
       unseenHearts.forEach((heartCard, idx) => {
-        const norm = total > 1 ? idx / (total - 1) - 0.5 : 0; // -0.5 .. +0.5
+        const norm = total > 1 ? idx / (total - 1) - 0.5 : 0;
         const faceTex = createCardFaceTexture(heartCard, { ghost: true });
         const ghostCard = createCardMesh(faceTex, cardBackTex, { ghost: true, opacity: 0.86 });
         ghostCard.scale.set(0.62, 0.6, 0.62);
-        // ZYX order: tilt upright facing the player first (X), then fan cleanly in the card plane (Z)
         ghostCard.rotation.order = 'ZYX';
         ghostCard.rotation.x = Math.PI / 2 - 0.34;
         ghostCard.rotation.z = -norm * 0.58;
@@ -1003,7 +1139,7 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
 
   const playAnimations = (animations: readonly TableAnimation[], nowMs: number) => {
     snapAnimations();
-    if (!isLiveSnapshot(currentSpot) || animations.length === 0) {
+    if (!isLiveSnapshot(currentSpot) || !currentSpot.live || animations.length === 0) {
       return;
     }
 
@@ -1012,24 +1148,26 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       return;
     }
 
-    const dealFlyingCards: ActiveAnimationRun['dealFlyingCards'][number][] = [];
-    const chipFlights: ActiveAnimationRun['chipFlights'][number][] = [];
-    const hiddenBetSeats = new Set<TableSeatId>();
-    const dealtSeats = new Set<TableSeatId>();
+    if (!isChipPlanReconcilable(currentSpot.live, animations)) {
+      return;
+    }
+
+    const dealFlyingCards: DealCardFlight[] = [];
+    const boardCardFlights: BoardCardFlight[] = [];
+    const chipFlights: ChipFlight[] = [];
 
     for (const anim of animations) {
       switch (anim.type) {
         case 'deal-hand': {
-          // Deal round-robin, 1 card to each seat at a time, starting from DEAL_ORIGIN
+          const originPos = getDealOrigin(anim.dealerSeatId ?? currentSpot.live.dealerSeatId);
           let orderIdx = 0;
           for (let cardSlotIdx = 0; cardSlotIdx < anim.cardsPerSeat; cardSlotIdx += 1) {
             for (const seatId of anim.seatIds) {
-              dealtSeats.add(seatId);
               const layout = SEAT_LAYOUTS[seatId];
               const flyingCard = createCardMesh(cardBackTex, cardBackTex);
               const scale = seatId === 'hero' ? 0.92 : 0.78;
               flyingCard.scale.set(scale, 1, scale);
-              flyingCard.position.set(DEAL_ORIGIN.x, DEAL_ORIGIN.y, DEAL_ORIGIN.z);
+              flyingCard.position.set(originPos[0], originPos[1], originPos[2]);
               flyingCard.visible = false;
               animFxGroup.add(flyingCard);
 
@@ -1043,17 +1181,46 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
                     ]
                   : [layout.cardPos[0] + slotOffsetX, layout.cardPos[1] + 0.01, layout.cardPos[2]];
 
+              const targetCardObj =
+                seatId === 'hero'
+                  ? (heroCardsGroup.children[cardSlotIdx] ?? null)
+                  : (rivalCardGroups[seatId].children[cardSlotIdx] ?? null);
+
+              const startDelayMs = anim.delayMs + orderIdx * anim.staggerMs;
               dealFlyingCards.push({
                 mesh: flyingCard,
+                targetCardObj,
                 seatId,
                 cardSlotIdx,
-                startDelayMs: anim.delayMs + orderIdx * anim.staggerMs,
+                startDelayMs,
+                endMs: startDelayMs + anim.cardDurationMs,
                 durationMs: anim.cardDurationMs,
+                originPos,
                 endPos,
                 endRotY: layout.cardRotY,
               });
               orderIdx += 1;
             }
+          }
+          break;
+        }
+
+        case 'deal-board': {
+          const originPos = getDealOrigin(anim.dealerSeatId ?? currentSpot.live.dealerSeatId);
+          for (let idx = anim.fromIndex; idx < anim.toIndex; idx += 1) {
+            const holder = boardCardHolders[idx];
+            if (!holder) {
+              continue;
+            }
+            const startDelayMs = anim.delayMs + (idx - anim.fromIndex) * anim.staggerMs;
+            boardCardFlights.push({
+              holder,
+              originPos,
+              targetX: BOARD_XS[idx] ?? riverSlotX,
+              startDelayMs,
+              endMs: startDelayMs + anim.cardDurationMs,
+              durationMs: anim.cardDurationMs,
+            });
           }
           break;
         }
@@ -1064,16 +1231,20 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
           pile.position.set(layout.stackPos[0], 0.01, layout.stackPos[1]);
           pile.visible = false;
           animFxGroup.add(pile);
-          hiddenBetSeats.add(anim.seatId);
+          const endPos: readonly [number, number, number] = anim.toPot
+            ? [POT_POS.x, 0.01, POT_POS.z]
+            : [layout.betPos[0], 0.01, layout.betPos[1]];
           chipFlights.push({
             group: pile,
+            baseScale: 0.88,
             startDelayMs: anim.delayMs,
+            endMs: anim.delayMs + anim.durationMs,
             durationMs: anim.durationMs,
             startPos: [layout.stackPos[0], 0.01, layout.stackPos[1]],
-            endPos: [layout.betPos[0], 0.01, layout.betPos[1]],
-            arcHeight: 0.12,
-            shrinkAtEnd: false,
-            targetBetSeatId: anim.seatId,
+            endPos,
+            arcHeight: anim.toPot ? 0.11 : 0.12,
+            shrinkAtEnd: Boolean(anim.toPot),
+            phase: -1,
           });
           break;
         }
@@ -1087,12 +1258,15 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
             animFxGroup.add(pile);
             chipFlights.push({
               group: pile,
+              baseScale: 0.88,
               startDelayMs: anim.delayMs,
+              endMs: anim.delayMs + anim.durationMs,
               durationMs: anim.durationMs,
               startPos: [layout.betPos[0], 0.01, layout.betPos[1]],
               endPos: [POT_POS.x, 0.01, POT_POS.z],
               arcHeight: 0.08,
               shrinkAtEnd: true,
+              phase: -1,
             });
           }
           break;
@@ -1101,40 +1275,41 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
         case 'payout': {
           for (const transfer of anim.transfers) {
             const layout = SEAT_LAYOUTS[transfer.seatId];
-            // Slide exact payout chips from pot to winner
             const pile = createChipPile(transfer.chips, { scale: 0.86 });
             pile.position.set(POT_POS.x, 0.01, POT_POS.z);
             pile.visible = false;
             animFxGroup.add(pile);
             chipFlights.push({
               group: pile,
+              baseScale: 0.86,
               startDelayMs: anim.delayMs,
+              endMs: anim.delayMs + anim.durationMs,
               durationMs: anim.durationMs,
               startPos: [POT_POS.x, 0.01, POT_POS.z],
               endPos: [layout.stackPos[0], 0.01, layout.stackPos[1]],
               arcHeight: 0.13,
               shrinkAtEnd: true,
+              phase: -1,
             });
           }
           break;
         }
 
-        case 'deal-board':
         case 'fold-seat':
         case 'showdown-reveal':
-          // Animated directly on the real card holders in stepAnimations
           break;
       }
     }
 
     activeRun = {
+      eventKey: getLiveEventKey(currentSpot.live),
       startTimeMs: nowMs,
       totalDurationMs,
       animations,
       dealFlyingCards,
+      boardCardFlights,
       chipFlights,
-      hiddenBetSeats,
-      dealtSeats,
+      lastElapsedMs: 0,
     };
 
     // Apply t=0 frame immediately so cards/chips start cleanly at their origin
@@ -1152,53 +1327,73 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       snapAnimations();
       return false;
     }
+    run.lastElapsedMs = elapsed;
 
-    // 1. Deal hand flying cards
-    if (run.dealtSeats.size > 0) {
-      const seatComplete = new Map<TableSeatId, boolean>();
-      for (const seatId of run.dealtSeats) {
-        seatComplete.set(seatId, true);
-      }
-
-      for (const card of run.dealFlyingCards) {
-        const local = elapsed - card.startDelayMs;
-        if (local < 0) {
-          card.mesh.visible = false;
-          seatComplete.set(card.seatId, false);
-        } else if (local < card.durationMs) {
-          const u = easeOutCubic(local / card.durationMs);
-          card.mesh.visible = true;
-          card.mesh.position.set(
-            DEAL_ORIGIN.x + (card.endPos[0] - DEAL_ORIGIN.x) * u,
-            DEAL_ORIGIN.y + (card.endPos[1] - DEAL_ORIGIN.y) * u + Math.sin(u * Math.PI) * 0.14,
-            DEAL_ORIGIN.z + (card.endPos[2] - DEAL_ORIGIN.z) * u,
-          );
-          card.mesh.rotation.y = card.endRotY * u;
-          seatComplete.set(card.seatId, false);
-        } else {
-          card.mesh.visible = false;
-        }
-      }
-
-      for (const [seatId, done] of seatComplete) {
-        if (seatId === 'hero') {
-          heroCardsGroup.visible = done && currentSpot.heroCards.length > 0;
-        } else {
-          const seat = findLiveSeat(currentSpot, seatId);
-          rivalCardGroups[seatId].visible = done && seat?.status !== 'out';
-        }
-      }
-    }
-
-    // 2. Flying chip piles (bet, street-sweep, payout)
-    for (const seatId of run.hiddenBetSeats) {
-      seatBetGroups[seatId].visible = false;
-    }
-    for (const flight of run.chipFlights) {
-      const local = elapsed - flight.startDelayMs;
+    // 1. Deal hand flying cards — per-card visibility settling (zero per-frame Map allocation)
+    const dealCards = run.dealFlyingCards;
+    for (let i = 0; i < dealCards.length; i += 1) {
+      const card = dealCards[i]!;
+      const local = elapsed - card.startDelayMs;
       if (local < 0) {
+        card.mesh.visible = false;
+        if (card.targetCardObj) {
+          card.targetCardObj.visible = false;
+        }
+      } else if (elapsed < card.endMs) {
+        const u = easeOutCubic(local / card.durationMs);
+        card.mesh.visible = true;
+        card.mesh.position.set(
+          card.originPos[0] + (card.endPos[0] - card.originPos[0]) * u,
+          card.originPos[1] + (card.endPos[1] - card.originPos[1]) * u + Math.sin(u * Math.PI) * 0.14,
+          card.originPos[2] + (card.endPos[2] - card.originPos[2]) * u,
+        );
+        card.mesh.rotation.y = card.endRotY * u;
+        if (card.targetCardObj) {
+          card.targetCardObj.visible = false;
+        }
+      } else {
+        card.mesh.visible = false;
+        if (card.targetCardObj) {
+          card.targetCardObj.visible = true;
+        }
+      }
+    }
+
+    // 2. Deal board cards from dealer origin
+    const boardFlights = run.boardCardFlights;
+    for (let i = 0; i < boardFlights.length; i += 1) {
+      const bf = boardFlights[i]!;
+      const local = elapsed - bf.startDelayMs;
+      if (local < 0) {
+        bf.holder.visible = false;
+      } else if (elapsed < bf.endMs) {
+        const u = easeOutCubic(local / bf.durationMs);
+        bf.holder.visible = true;
+        bf.holder.position.set(
+          bf.originPos[0] + (bf.targetX - bf.originPos[0]) * u,
+          bf.originPos[1] + (BOARD_Y - bf.originPos[1]) * u + Math.sin(u * Math.PI) * 0.2,
+          bf.originPos[2] + (BOARD_Z - bf.originPos[2]) * u,
+        );
+        bf.holder.rotation.set(BOARD_TILT_X * u, 0, (1 - u) * Math.PI);
+      } else {
+        bf.holder.visible = true;
+        bf.holder.position.set(bf.targetX, BOARD_Y, BOARD_Z);
+        bf.holder.rotation.set(BOARD_TILT_X, 0, 0);
+      }
+    }
+
+    // 3. Flying chip piles (bet, street-sweep, payout) with phase-gated stationary pile updates
+    const chipFlights = run.chipFlights;
+    let chipPhaseChanged = false;
+    for (let i = 0; i < chipFlights.length; i += 1) {
+      const flight = chipFlights[i]!;
+      const local = elapsed - flight.startDelayMs;
+      let nextPhase: number;
+      if (local < 0) {
+        nextPhase = 0;
         flight.group.visible = false;
-      } else if (local < flight.durationMs) {
+      } else if (elapsed < flight.endMs) {
+        nextPhase = 1;
         const u = easeOutCubic(local / flight.durationMs);
         flight.group.visible = true;
         flight.group.position.set(
@@ -1210,113 +1405,85 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
         );
         if (flight.shrinkAtEnd && u > 0.82) {
           const fade = Math.max(0.2, 1 - (u - 0.82) / 0.18);
-          flight.group.scale.setScalar(0.86 * fade);
+          flight.group.scale.setScalar(flight.baseScale * fade);
+        } else {
+          flight.group.scale.setScalar(flight.baseScale);
         }
       } else {
+        nextPhase = 2;
         flight.group.visible = false;
-        if (flight.targetBetSeatId) {
-          seatBetGroups[flight.targetBetSeatId].visible = true;
-        }
+      }
+
+      if (nextPhase !== flight.phase) {
+        flight.phase = nextPhase;
+        chipPhaseChanged = true;
       }
     }
 
-    // 3. Direct-transform animations (deal-board, fold-seat, showdown-reveal, winner pulse)
-    for (const anim of run.animations) {
-      switch (anim.type) {
-        case 'deal-board': {
-          for (let idx = anim.fromIndex; idx < anim.toIndex; idx += 1) {
-            const holder = boardCardHolders[idx];
-            if (!holder) {
-              continue;
-            }
-            const targetX = BOARD_XS[idx] ?? riverSlotX;
-            const local = elapsed - (anim.delayMs + (idx - anim.fromIndex) * anim.staggerMs);
-            if (local < 0) {
-              holder.visible = false;
-            } else if (local < anim.cardDurationMs) {
-              const u = easeOutCubic(local / anim.cardDurationMs);
-              holder.visible = true;
-              holder.position.set(
-                DEAL_ORIGIN.x + (targetX - DEAL_ORIGIN.x) * u,
-                DEAL_ORIGIN.y + (BOARD_Y - DEAL_ORIGIN.y) * u + Math.sin(u * Math.PI) * 0.2,
-                DEAL_ORIGIN.z + (BOARD_Z - DEAL_ORIGIN.z) * u,
-              );
-              holder.rotation.set(BOARD_TILT_X * u, 0, (1 - u) * Math.PI);
-            } else {
-              holder.visible = true;
-              holder.position.set(targetX, BOARD_Y, BOARD_Z);
-              holder.rotation.set(BOARD_TILT_X, 0, 0);
-            }
-          }
-          break;
-        }
+    if (chipPhaseChanged && currentSpot.live) {
+      applyLiveChipAllocation(computeTableChipAllocation(currentSpot.live, run.animations, elapsed));
+    }
 
-        case 'fold-seat': {
-          const local = elapsed - anim.delayMs;
-          const u = local <= 0 ? 0 : easeOutCubic(local / anim.durationMs);
-          const opacity = 1 + (FOLDED_CARD_OPACITY - 1) * u;
-          if (anim.seatId === 'hero') {
-            heroCardsGroup.position.set(
-              HERO_FOLD_OFFSET.x * u,
-              HERO_FOLD_OFFSET.y * u,
-              HERO_FOLD_OFFSET.z * u,
-            );
-            setGroupOpacity(heroCardsGroup, opacity);
-          } else {
-            const layout = SEAT_LAYOUTS[anim.seatId];
-            const pair = rivalCardGroups[anim.seatId];
-            pair.position.set(
-              layout.cardPos[0] + (layout.muckPos[0] - layout.cardPos[0]) * u,
-              layout.cardPos[1] + (layout.muckPos[1] - layout.cardPos[1]) * u,
-              layout.cardPos[2] + (layout.muckPos[2] - layout.cardPos[2]) * u,
-            );
-            setGroupOpacity(pair, opacity);
-          }
-          break;
+    // 4. Direct-transform animations (fold-seat, showdown-reveal, winner pulse) — zero closures
+    const anims = run.animations;
+    for (let a = 0; a < anims.length; a += 1) {
+      const anim = anims[a]!;
+      if (anim.type === 'fold-seat') {
+        const local = elapsed - anim.delayMs;
+        const u = local <= 0 ? 0 : easeOutCubic(local / anim.durationMs);
+        const opacity = 1 + (FOLDED_CARD_OPACITY - 1) * u;
+        if (anim.seatId === 'hero') {
+          heroCardsGroup.position.set(
+            HERO_FOLD_OFFSET.x * u,
+            HERO_FOLD_OFFSET.y * u,
+            HERO_FOLD_OFFSET.z * u,
+          );
+          setObjectOpacity(heroCardsGroup, opacity);
+        } else {
+          const layout = SEAT_LAYOUTS[anim.seatId];
+          const pair = rivalCardGroups[anim.seatId];
+          pair.position.set(
+            layout.cardPos[0] + (layout.muckPos[0] - layout.cardPos[0]) * u,
+            layout.cardPos[1] + (layout.muckPos[1] - layout.cardPos[1]) * u,
+            layout.cardPos[2] + (layout.muckPos[2] - layout.cardPos[2]) * u,
+          );
+          setObjectOpacity(pair, opacity);
         }
-
-        case 'showdown-reveal': {
-          if (anim.seatId === 'hero') {
-            break;
-          }
+      } else if (anim.type === 'showdown-reveal') {
+        if (anim.seatId !== 'hero') {
           const pair = rivalCardGroups[anim.seatId];
           const local = elapsed - anim.delayMs;
           const u = local <= 0 ? 0 : easeOutCubic(local / anim.durationMs);
-          pair.children.forEach((child, i) => {
+          const children = pair.children;
+          for (let i = 0; i < children.length; i += 1) {
+            const child = children[i]!;
             child.position.set(
               i === 0 ? -0.145 : 0.145,
               0.025 + i * 0.003 + Math.sin(u * Math.PI) * 0.16,
               0,
             );
             child.rotation.set(0.16 * u, i === 0 ? 0.08 : -0.08, (1 - u) * Math.PI);
-          });
-          break;
-        }
-
-        case 'payout': {
-          const local = elapsed - anim.delayMs;
-          const u = local <= 0 ? 0 : Math.min(1, local / anim.durationMs);
-          const pulse = Math.sin(u * Math.PI);
-          for (const winnerId of anim.winnerIds) {
-            const layout = SEAT_LAYOUTS[winnerId];
-            const ring = seatWinnerRings[winnerId];
-            ring.visible = true;
-            const scaleBoost = 1 + pulse * 0.14;
-            ring.scale.set(
-              layout.actorRingScale[0] * 1.08 * scaleBoost,
-              1,
-              layout.actorRingScale[1] * 1.08 * scaleBoost,
-            );
-            const mat = ring.material as THREE.MeshStandardMaterial;
-            mat.opacity = 0.65 + pulse * 0.35;
           }
-          break;
         }
-
-        case 'deal-hand':
-        case 'bet-chips':
-        case 'street-sweep':
-          break;
+      } else if (anim.type === 'payout') {
+        const local = elapsed - anim.delayMs;
+        const u = local <= 0 ? 0 : Math.min(1, local / anim.durationMs);
+        const pulse = Math.sin(u * Math.PI);
+        const winners = anim.winnerIds;
+        for (let w = 0; w < winners.length; w += 1) {
+          const winnerId = winners[w]!;
+          const layout = SEAT_LAYOUTS[winnerId];
+          const ring = seatWinnerRings[winnerId];
+          ring.visible = true;
+          const scaleBoost = 1 + pulse * 0.14;
+          ring.scale.set(
+            layout.actorRingScale[0] * 1.08 * scaleBoost,
+            1,
+            layout.actorRingScale[1] * 1.08 * scaleBoost,
+          );
+          const mat = ring.material as THREE.MeshStandardMaterial;
+          mat.opacity = 0.65 + pulse * 0.35;
+        }
       }
     }
 

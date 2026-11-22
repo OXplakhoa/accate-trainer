@@ -82,13 +82,21 @@ function drawPillPath(
 }
 
 /**
- * Draws a compact, high-contrast canvas texture for a 3D billboard action bubble.
- * Kept small (256x72) for low memory footprint while remaining crisp at 1440px and 390px.
+ * Draws a crisp, high-contrast canvas texture for a 3D billboard action bubble.
+ * Sized at 384x112 with bold typography so projected cap height stays >= 9 CSS px
+ * on mobile (390x844) in the live decision camera while remaining compact on desktop.
  */
+export const ACTION_BUBBLE_CANVAS = {
+  width: 384,
+  height: 112,
+  fontSizeNormal: 64,
+  fontSizeLong: 58,
+} as const;
+
 export function createActionBubbleTexture(spec: ActionBubbleSpec): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 72;
+  canvas.width = ACTION_BUBBLE_CANVAS.width;
+  canvas.height = ACTION_BUBBLE_CANVAS.height;
   const ctx = canvas.getContext('2d');
   if (ctx) {
     const style = TONE_STYLES[spec.tone];
@@ -96,17 +104,17 @@ export function createActionBubbleTexture(spec: ActionBubbleSpec): THREE.CanvasT
 
     // Subtle grounded shadow
     ctx.save();
-    ctx.fillStyle = 'rgba(22, 16, 12, 0.28)';
-    drawPillPath(ctx, 10, 10, 236, 56, 28);
+    ctx.fillStyle = 'rgba(22, 16, 12, 0.30)';
+    drawPillPath(ctx, 10, 12, 364, 92, 46);
     ctx.fill();
     ctx.restore();
 
     // Main pill body
-    drawPillPath(ctx, 8, 6, 240, 56, 28);
+    drawPillPath(ctx, 8, 6, 368, 92, 46);
     ctx.fillStyle = style.bg;
     ctx.fill();
 
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 6;
     ctx.strokeStyle = style.border;
     ctx.stroke();
 
@@ -114,9 +122,12 @@ export function createActionBubbleTexture(spec: ActionBubbleSpec): THREE.CanvasT
     ctx.fillStyle = style.text;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const fontSize = spec.label.length > 9 ? 28 : 32;
+    const fontSize =
+      spec.label.length > 9
+        ? ACTION_BUBBLE_CANVAS.fontSizeLong
+        : ACTION_BUBBLE_CANVAS.fontSizeNormal;
     ctx.font = `800 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-    ctx.fillText(spec.label, 128, 35, 212);
+    ctx.fillText(spec.label, 192, 54, 336);
   }
 
   const texture = new THREE.CanvasTexture(canvas);

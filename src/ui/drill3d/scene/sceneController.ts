@@ -1,19 +1,31 @@
 import * as THREE from 'three';
-import type { ScenePhase } from '../contract';
+import type { ScenePhase, SceneTableSnapshot } from '../contract';
 import {
   buildCharacters,
   getLiveCharacterPose,
-  lerpCharacterPose,
   PHASE_CHARACTER_POSES,
   type CharacterPoseState,
   type CharactersRig,
 } from './buildCharacters';
 import { buildRoomAndTable } from './buildRoomAndTable';
 import { buildTabletop, type TabletopRig } from './buildTabletop';
-import { isHeroDecisionTurn, planSceneMotion, type SceneMotionState } from './motion';
+import {
+  copyCharacterPose,
+  createMutableCharacterPose,
+  isHeroDecisionTurn,
+  lerpCharacterPoseInto,
+  planSceneMotion,
+  type MutableCharacterPoseState,
+  type SceneMotionState,
+} from './motion';
 import { disposeObject3DResources, SCENE_COLORS } from './palette';
 import { getEffectiveHighlight, getOccupiedRivals } from './snapshot';
-import { planTableAnimations } from './tableMotion';
+import {
+  classifyLiveProgress,
+  getLiveProgressMark,
+  planTableAnimations,
+  type LiveProgressMark,
+} from './tableMotion';
 
 export interface CameraPreset {
   readonly position: readonly [number, number, number];
@@ -24,14 +36,14 @@ export interface CameraPreset {
 
 /**
  * Three distinct camera angles per spec:
- * - arrival: horizontal / eye-level establishing shot across the cream room & oval table
+ * - arrival: horizontal / eye-level establishing shot across the cream room & oval table with unoccluded pot
  * - decision: fixed elevated diagonal angle with legible board, pot, call, Hero cards & all 3 rival faces
  * - review: shifted reaction diagonal focusing on the rivals' expressions & synced table highlights
  */
 export const CAMERA_PRESETS: Record<ScenePhase, CameraPreset> = {
   arrival: {
-    position: [0.0, 1.24, 4.3],
-    target: [0.0, 0.36, -0.3],
+    position: [0.0, 1.44, 4.24],
+    target: [0.0, 0.3, -0.3],
     baseFov: 38,
     minHFov: 56,
   },
@@ -95,36 +107,30 @@ export class DrillSceneController {
 
   private disposed = false;
   private lastState: SceneControllerState;
-  private currentPos = new THREE.Vector3();
-  private currentTarget = new THREE.Vector3();
+  private liveHighWater: LiveProgressMark | null = null;
+  private lastAcceptedLiveSpot: SceneTableSnapshot | null = null;
+
+  // Preallocated vectors & pose buffers so animation frames perform zero heap allocations
+  private readonly currentPos = new THREE.Vector3();
+  private readonly currentTarget = new THREE.Vector3();
+  private readonly phaseStartPos = new THREE.Vector3();
+  private readonly phaseStartTarget = new THREE.Vector3();
+  private readonly phaseEndPos = new THREE.Vector3();
+  private readonly phaseEndTarget = new THREE.Vector3();
   private currentBaseFov = 38;
   private currentMinHFov = 54;
-  private currentPose: CharacterPoseState;
+  private readonly currentPose: MutableCharacterPoseState;
+  private readonly transitionStartPose: MutableCharacterPoseState;
+  private readonly transitionEndPose: MutableCharacterPoseState;
 
   private activeRafId: number | null = null;
   private resizeRafId: number | null = null;
-  private activeTransition:
-    | {
-        readonly kind: 'phase';
-        readonly startTime: number;
-        readonly startPos: THREE.Vector3;
-        readonly startTarget: THREE.Vector3;
-        readonly startBaseFov: number;
-        readonly startMinHFov: number;
-        readonly startPose: CharacterPoseState;
-        readonly endPos: THREE.Vector3;
-        readonly endTarget: THREE.Vector3;
-        readonly endBaseFov: number;
-        readonly endMinHFov: number;
-        readonly endPose: CharacterPoseState;
-      }
-    | {
-        readonly kind: 'pose';
-        readonly startTime: number;
-        readonly startPose: CharacterPoseState;
-        readonly endPose: CharacterPoseState;
-      }
-    | null = null;
+  private activeTransitionKind: 'none' | 'phase' | 'pose' = 'none';
+  private transitionStartTime = 0;
+  private phaseStartBaseFov = 38;
+  private phaseStartMinHFov = 54;
+  private phaseEndBaseFov = 38;
+  private phaseEndMinHFov = 54;
   private width = 1;
   private height = 1;
 
@@ -136,7 +142,11 @@ export class DrillSceneController {
     this.container = container;
     this.onContextLostCallback = onContextLost;
     this.lastState = initialState;
-    this.currentPose = resolveTargetPose(initialState);
+
+    const initialPose = resolveTargetPose(initialState);
+    this.currentPose = createMutableCharacterPose(initialPose);
+    this.transitionStartPose = createMutableCharacterPose(initialPose);
+    this.transitionEndPose = createMutableCharacterPose(initialPose);
 
     // Renderer setup — throws cleanly if WebGL is disabled so caller can switch to 2D fallback
     this.renderer = new THREE.WebGLRenderer({
@@ -177,9 +187,29 @@ export class DrillSceneController {
     this.scene.add(this.tabletop.root);
     this.tabletop.updateHighlight(getEffectiveHighlight(initialState.spot, initialState.highlight));
 
-    // Snap immediately to initial phase & pose, then measure & render initial frame once
-    this.snapToState(initialState.phase, this.currentPose, false);
+    // Snap immediately to initial phase & pose
+    this.snapCameraAndPose(initialState.phase, initialPose);
+
+    // Track monotonic live progress and play initial deal once if eligible
+    let shouldStartInitialDealLoop = false;
+    if (initialState.spot.live) {
+      const initialPlan = planTableAnimations(null, initialState.spot, initialState.reducedMotion, null);
+      this.liveHighWater = initialPlan.highWater ?? getLiveProgressMark(initialState.spot.live);
+      this.lastAcceptedLiveSpot = initialState.spot;
+      if (
+        !initialState.reducedMotion &&
+        initialPlan.mode === 'animate' &&
+        initialPlan.animations.length > 0
+      ) {
+        this.tabletop.playAnimations?.(initialPlan.animations, performance.now());
+        shouldStartInitialDealLoop = this.tabletop.hasActiveAnimations?.() ?? false;
+      }
+    }
+
     this.measureAndResize(true);
+    if (shouldStartInitialDealLoop) {
+      this.ensureAnimationLoop();
+    }
 
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(() => {
@@ -189,12 +219,7 @@ export class DrillSceneController {
         if (this.resizeRafId !== null) {
           cancelAnimationFrame(this.resizeRafId);
         }
-        this.resizeRafId = requestAnimationFrame(() => {
-          this.resizeRafId = null;
-          if (!this.disposed) {
-            this.measureAndResize();
-          }
-        });
+        this.resizeRafId = requestAnimationFrame(this.handleResizeFrame);
       });
       this.resizeObserver.observe(this.container);
     } else {
@@ -234,6 +259,30 @@ export class DrillSceneController {
     this.scene.add(tablePool);
   }
 
+  private readonly handleResizeFrame = (): void => {
+    this.resizeRafId = null;
+    if (!this.disposed) {
+      this.measureAndResize();
+    }
+  };
+
+  private readonly handleAnimationFrame = (now: number): void => {
+    if (this.disposed) {
+      this.activeRafId = null;
+      return;
+    }
+
+    const cameraOrPoseActive = this.stepCameraAndPoseTransition(now);
+    const tabletopActive = this.tabletop.stepAnimations?.(now) ?? false;
+    this.renderOnce();
+
+    if (cameraOrPoseActive || tabletopActive) {
+      this.activeRafId = requestAnimationFrame(this.handleAnimationFrame);
+    } else {
+      this.activeRafId = null;
+    }
+  };
+
   private handleContextLost = (event: Event): void => {
     event.preventDefault();
     if (this.disposed) {
@@ -248,7 +297,7 @@ export class DrillSceneController {
   };
 
   private cancelTransition(): void {
-    this.activeTransition = null;
+    this.activeTransitionKind = 'none';
     if (this.activeRafId !== null) {
       cancelAnimationFrame(this.activeRafId);
       this.activeRafId = null;
@@ -272,13 +321,13 @@ export class DrillSceneController {
   }
 
   private snapCameraAndPose(phase: ScenePhase, pose: CharacterPoseState): void {
-    this.activeTransition = null;
+    this.activeTransitionKind = 'none';
     const preset = CAMERA_PRESETS[phase];
     this.currentPos.set(preset.position[0], preset.position[1], preset.position[2]);
     this.currentTarget.set(preset.target[0], preset.target[1], preset.target[2]);
     this.currentBaseFov = preset.baseFov;
     this.currentMinHFov = preset.minHFov;
-    this.currentPose = pose;
+    copyCharacterPose(pose, this.currentPose);
     this.characters.applyPose(this.currentPose);
     this.applyCameraState();
   }
@@ -294,20 +343,18 @@ export class DrillSceneController {
 
   private startPhaseTransition(phase: ScenePhase, endPose: CharacterPoseState): void {
     const preset = CAMERA_PRESETS[phase];
-    this.activeTransition = {
-      kind: 'phase',
-      startTime: performance.now(),
-      startPos: this.currentPos.clone(),
-      startTarget: this.currentTarget.clone(),
-      startBaseFov: this.currentBaseFov,
-      startMinHFov: this.currentMinHFov,
-      startPose: this.currentPose,
-      endPos: new THREE.Vector3(preset.position[0], preset.position[1], preset.position[2]),
-      endTarget: new THREE.Vector3(preset.target[0], preset.target[1], preset.target[2]),
-      endBaseFov: preset.baseFov,
-      endMinHFov: preset.minHFov,
-      endPose,
-    };
+    this.activeTransitionKind = 'phase';
+    this.transitionStartTime = performance.now();
+    this.phaseStartPos.copy(this.currentPos);
+    this.phaseStartTarget.copy(this.currentTarget);
+    this.phaseStartBaseFov = this.currentBaseFov;
+    this.phaseStartMinHFov = this.currentMinHFov;
+    this.phaseEndPos.set(preset.position[0], preset.position[1], preset.position[2]);
+    this.phaseEndTarget.set(preset.target[0], preset.target[1], preset.target[2]);
+    this.phaseEndBaseFov = preset.baseFov;
+    this.phaseEndMinHFov = preset.minHFov;
+    copyCharacterPose(this.currentPose, this.transitionStartPose);
+    copyCharacterPose(endPose, this.transitionEndPose);
     this.ensureAnimationLoop();
   }
 
@@ -315,48 +362,47 @@ export class DrillSceneController {
    * Finite pose-only settle when active turn changes while keeping camera locked/decision-stable.
    */
   private startPoseTransition(endPose: CharacterPoseState): void {
-    this.activeTransition = {
-      kind: 'pose',
-      startTime: performance.now(),
-      startPose: this.currentPose,
-      endPose,
-    };
+    this.activeTransitionKind = 'pose';
+    this.transitionStartTime = performance.now();
+    copyCharacterPose(this.currentPose, this.transitionStartPose);
+    copyCharacterPose(endPose, this.transitionEndPose);
     this.ensureAnimationLoop();
   }
 
   private stepCameraAndPoseTransition(now: number): boolean {
-    const tr = this.activeTransition;
-    if (!tr) {
+    if (this.activeTransitionKind === 'none') {
       return false;
     }
 
-    if (tr.kind === 'phase') {
-      const rawT = Math.min(1, Math.max(0, (now - tr.startTime) / TRANSITION_DURATION_MS));
+    if (this.activeTransitionKind === 'phase') {
+      const rawT = Math.min(1, Math.max(0, (now - this.transitionStartTime) / TRANSITION_DURATION_MS));
       const eased = easeOutCubic(rawT);
 
-      this.currentPos.lerpVectors(tr.startPos, tr.endPos, eased);
-      this.currentTarget.lerpVectors(tr.startTarget, tr.endTarget, eased);
-      this.currentBaseFov = tr.startBaseFov + (tr.endBaseFov - tr.startBaseFov) * eased;
-      this.currentMinHFov = tr.startMinHFov + (tr.endMinHFov - tr.startMinHFov) * eased;
-      this.currentPose = lerpCharacterPose(tr.startPose, tr.endPose, eased);
+      this.currentPos.lerpVectors(this.phaseStartPos, this.phaseEndPos, eased);
+      this.currentTarget.lerpVectors(this.phaseStartTarget, this.phaseEndTarget, eased);
+      this.currentBaseFov =
+        this.phaseStartBaseFov + (this.phaseEndBaseFov - this.phaseStartBaseFov) * eased;
+      this.currentMinHFov =
+        this.phaseStartMinHFov + (this.phaseEndMinHFov - this.phaseStartMinHFov) * eased;
+      lerpCharacterPoseInto(this.transitionStartPose, this.transitionEndPose, eased, this.currentPose);
 
       this.characters.applyPose(this.currentPose);
       this.applyCameraState();
 
       if (rawT >= 1) {
-        this.activeTransition = null;
+        this.activeTransitionKind = 'none';
         return false;
       }
       return true;
     }
 
-    const rawT = Math.min(1, Math.max(0, (now - tr.startTime) / POSE_SETTLE_DURATION_MS));
+    const rawT = Math.min(1, Math.max(0, (now - this.transitionStartTime) / POSE_SETTLE_DURATION_MS));
     const eased = easeOutCubic(rawT);
-    this.currentPose = lerpCharacterPose(tr.startPose, tr.endPose, eased);
+    lerpCharacterPoseInto(this.transitionStartPose, this.transitionEndPose, eased, this.currentPose);
     this.characters.applyPose(this.currentPose);
 
     if (rawT >= 1) {
-      this.activeTransition = null;
+      this.activeTransitionKind = 'none';
       return false;
     }
     return true;
@@ -370,25 +416,7 @@ export class DrillSceneController {
     if (this.disposed || this.activeRafId !== null) {
       return;
     }
-
-    const tick = (now: number) => {
-      if (this.disposed) {
-        this.activeRafId = null;
-        return;
-      }
-
-      const cameraOrPoseActive = this.stepCameraAndPoseTransition(now);
-      const tabletopActive = this.tabletop.stepAnimations?.(now) ?? false;
-      this.renderOnce();
-
-      if (cameraOrPoseActive || tabletopActive) {
-        this.activeRafId = requestAnimationFrame(tick);
-      } else {
-        this.activeRafId = null;
-      }
-    };
-
-    this.activeRafId = requestAnimationFrame(tick);
+    this.activeRafId = requestAnimationFrame(this.handleAnimationFrame);
   }
 
   public measureAndResize(forceRender = false): void {
@@ -421,7 +449,26 @@ export class DrillSceneController {
     const isAnimating =
       this.activeRafId !== null || (this.tabletop.hasActiveAnimations?.() ?? false);
     const plan = planSceneMotion(prevState, state, isAnimating);
-    const tablePlan = planTableAnimations(prevState.spot, state.spot, state.reducedMotion);
+
+    let tablePlan;
+    if (state.spot.live) {
+      const relation = classifyLiveProgress(this.liveHighWater, state.spot.live);
+      tablePlan = planTableAnimations(
+        this.lastAcceptedLiveSpot,
+        state.spot,
+        state.reducedMotion,
+        this.liveHighWater,
+      );
+      if (relation === 'forward') {
+        this.liveHighWater = tablePlan.highWater ?? getLiveProgressMark(state.spot.live);
+        this.lastAcceptedLiveSpot = state.spot;
+      }
+    } else {
+      tablePlan = planTableAnimations(prevState.spot, state.spot, state.reducedMotion, null);
+      this.liveHighWater = null;
+      this.lastAcceptedLiveSpot = null;
+    }
+
     this.lastState = state;
 
     const shouldPlayTableAnims =
