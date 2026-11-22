@@ -57,6 +57,7 @@ import {
 } from './dealAnimation';
 import {
   formatChipBreakdown,
+  formatCardShort,
   formatNumberVi,
   formatStreetLabel,
   formatTimelineEventVi,
@@ -100,6 +101,8 @@ export function SandboxApp({
   onControllerReady,
   disableMidHandFeedback = false,
   storage,
+  renderTableView,
+  hideTableSettings = false,
 }: SandboxAppProps) {
   const [session, setSession] = useState<SandboxSessionState>(() => {
     const loaded = loadSandboxSettings(storage);
@@ -595,6 +598,22 @@ export function SandboxApp({
       ? activeHand.seats
       : (session.boundary?.seats ?? []);
 
+  const actorId = activeHand?.phase === 'betting' ? activeHand.activePlayerId : null;
+  const tableView = renderTableView?.({
+    pot: potValue,
+    call: validation.callAmount ?? 0,
+    heroCards: heroSeat?.holeCards.map(formatCardShort) ?? [],
+    board: activeHand?.board.map(formatCardShort) ?? [],
+    street: activeHand?.street ?? null,
+    occupiedRivals: seatsToRender.flatMap((seat) => {
+      const rival = session.seatProfiles[seat.playerId]?.rivalId;
+      return rival ? [rival] : [];
+    }),
+    activeRival: actorId ? session.seatProfiles[actorId]?.rivalId ?? null : null,
+    activePlayerName: actorId ? getPlayerName(actorId, session.seatProfiles) : null,
+    reducedMotion: effectiveReducedMotion,
+  });
+
   const canPracticeCurrentSpot =
     onPracticeSpot !== undefined &&
     !disableMidHandFeedback &&
@@ -658,13 +677,13 @@ export function SandboxApp({
           >
             Sổ phiên
           </button>
-          <button
+          {!hideTableSettings && <button
             type="button"
             className="sb-btn sb-btn--secondary sb-btn--sm"
             onClick={() => setSettingsOpen(true)}
           >
             Cài đặt
-          </button>
+          </button>}
         </nav>
       </header>
 
@@ -710,11 +729,14 @@ export function SandboxApp({
                 aria-label="Khu vực bài chung và Pot"
                 data-deal-state={dealAnimState}
               >
+                {renderTableView && tableView}
                 <div className="sb-pot-display">
+                  {!renderTableView && (
                   <div className="sb-pot-display__main">
                     <span className="sb-label">{tTerm('pot', lang)}</span>
                     <strong className="sb-pot-value sb-num">{formatNumberVi(potValue)}</strong>
                   </div>
+                  )}
                   {potValue > 0 && (
                     <div className="sb-pot-display__chips">
                       {DENOMINATIONS.map((d) =>
@@ -738,7 +760,7 @@ export function SandboxApp({
                   )}
                 </div>
 
-                <div className="sb-board" aria-label="5 lá bài chung">
+                {!renderTableView && <div className="sb-board" aria-label="5 lá bài chung">
                   {[0, 1, 2, 3, 4].map((slotIdx) => {
                     const card = activeHand?.board[slotIdx] ?? null;
                     return card !== null ? (
@@ -752,7 +774,7 @@ export function SandboxApp({
                       <div key={slotIdx} className="sb-board-slot" aria-hidden="true" />
                     );
                   })}
-                </div>
+                </div>}
 
                 <div className="sb-turn-status" aria-live="polite">
                   {activeHand !== null && activeHand.phase === 'betting' && activeHand.activePlayerId && (
