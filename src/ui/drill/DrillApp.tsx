@@ -111,9 +111,19 @@ function safeNowMs(): number {
 
 export function DrillApp(props: DrillAppProps) {
   const soundRef = useRef<DrillSoundController | null>(null);
-  if (soundRef.current === null) {
-    soundRef.current = new DrillSoundController();
-  }
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const soundMutedRef = useRef(false);
+  // One controller per mounted shell: unlock is scoped to this .drill-shell and
+  // the controller (listeners, idle timer, AudioContext) is released on unmount.
+  useLayoutEffect(() => {
+    const controller = new DrillSoundController(shellRef.current ?? undefined);
+    controller.setMuted(soundMutedRef.current);
+    soundRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (soundRef.current === controller) soundRef.current = null;
+    };
+  }, []);
 
   // Load persisted state from browser storage with corruption & blocked-storage recovery
   const initialLoad = useMemo(() => loadDrillStateFromStorage(getBrowserLocalStorage), []);
@@ -735,7 +745,7 @@ export function DrillApp(props: DrillAppProps) {
     <div className={`accate-drill-root${reducedMotion ? ' drill-reduced-motion' : ''}`}>
       <style>{DRILL_SCOPED_CSS}</style>
 
-      <div className="drill-shell">
+      <div className="drill-shell" ref={shellRef}>
         {initialSpotError ? <div role="alert" className="drill-banner drill-banner-warn">Không thể luyện tình huống này: cần đến lượt Hero trong vòng cược. Hãy chọn tình huống mới hoặc quay lại Sandbox.</div> : null}
         {/* Top Bar */}
         <header className="drill-topbar">
@@ -767,6 +777,7 @@ export function DrillApp(props: DrillAppProps) {
               onClick={() => {
                 const next = !muted;
                 setMuted(next);
+                soundMutedRef.current = next;
                 soundRef.current?.setMuted(next);
               }}
             >

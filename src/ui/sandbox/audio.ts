@@ -1,53 +1,27 @@
-import type { Denomination, HandTimelineEvent } from '../../engine';
+import { emptyChips, type Denomination, type HandTimelineEvent } from '../../engine';
+import { AudioCore } from '../audio/AudioCore';
+import { TableSounds } from '../audio/TableSounds';
 import type { AudioSettings } from './types';
 
-interface WebAudioLikeContext {
-  readonly state: string;
-  readonly currentTime: number;
-  readonly destination: AudioNode;
-  resume(): Promise<void>;
-  close(): Promise<void>;
-  createOscillator(): OscillatorNode;
-  createGain(): GainNode;
-  createBiquadFilter(): BiquadFilterNode;
-}
-
-const CHIP_TONES: Readonly<
-  Record<Denomination, { readonly freq: number; readonly harmonic: number; readonly decay: number }>
-> = Object.freeze({
-  5: { freq: 1760, harmonic: 3520, decay: 0.065 },
-  10: { freq: 1396, harmonic: 2792, decay: 0.075 },
-  50: { freq: 1046, harmonic: 2093, decay: 0.095 },
-  100: { freq: 784, harmonic: 1568, decay: 0.12 },
-});
-
-/**
- * Web Audio sound engine for Sandbox & Tournament:
- * - Lazy-initializes `AudioContext` strictly after a user gesture (`unlockFromUserGesture`).
- * - Distinct ceramic/clay chip sounds per denomination (5 / 10 / 50 / 100), card flip/deal,
- *   out-of-turn chime, payout/bài cào fanfare, and timer tick.
- * - Independent channel gains (`music`, `chips`, `cards`, `timer`) + master mute.
- * - Deduplicates timeline event playback by unique key so replays/re-renders never double-fire.
- */
 export class SandboxAudioEngine {
-  private ctx: WebAudioLikeContext | null = null;
-  private unlocked = false;
-  private settings: AudioSettings;
+  private readonly audio: AudioCore;
+  private readonly sounds: TableSounds;
   private readonly playedKeys = new Set<string>();
-  private musicOsc: OscillatorNode | null = null;
-  private musicGain: GainNode | null = null;
+  private seatPan = new Map<string, number>();
+  private pendingFoldWin: { winnerId: string; amount: number } | null = null;
 
   constructor(initialSettings: AudioSettings) {
-    this.settings = initialSettings;
+    this.audio = new AudioCore(initialSettings);
+    this.sounds = new TableSounds(this.audio);
   }
 
   public updateSettings(next: AudioSettings): void {
-    this.settings = next;
-    this.syncAmbientMusic();
+    if (next.muted || next.chips <= 0) this.pendingFoldWin = null;
+    this.audio.updateSettings(next);
   }
 
   public isUnlocked(): boolean {
-    return this.unlocked;
+    return this.audio.isUnlocked();
   }
 
   public hasPlayed(eventKey: string): boolean {
@@ -56,286 +30,122 @@ export class SandboxAudioEngine {
 
   public clearPlayedHistory(): void {
     this.playedKeys.clear();
+    this.pendingFoldWin = null;
   }
 
-  /**
-   * Must ONLY be called inside a user gesture handler (`click`, `pointerdown`, `keydown`).
-   */
+  /** Called inside the existing click, pointer or key handler. */
   public unlockFromUserGesture(): boolean {
-    if (typeof globalThis === 'undefined' || typeof globalThis.window === 'undefined') {
-      return false;
-    }
-
-    if (this.ctx === null) {
-      const AudioCtor =
-        globalThis.window.AudioContext ??
-        (globalThis.window as unknown as { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext;
-      if (typeof AudioCtor !== 'function') {
-        return false;
-      }
-      try {
-        this.ctx = new AudioCtor() as unknown as WebAudioLikeContext;
-      } catch {
-        return false;
-      }
-    }
-
-    if (this.ctx.state === 'suspended') {
-      void this.ctx.resume().catch(() => {
-        // Ignore browser autoplay rejection
-      });
-    }
-
-    this.unlocked = true;
-    this.syncAmbientMusic();
-    return true;
-  }
-
-  private effectiveGain(channel: 'music' | 'chips' | 'cards' | 'timer'): number {
-    if (this.settings.muted) {
-      return 0;
-    }
-    const raw = this.settings[channel];
-    if (raw <= 0) {
-      return 0;
-    }
-    return Math.min(1, raw / 100) * 0.22;
-  }
-
-  private syncAmbientMusic(): void {
-    if (!this.unlocked || this.ctx === null) {
-      return;
-    }
-    const gainValue = this.effectiveGain('music') * 0.14;
-
-    if (gainValue <= 0) {
-      if (this.musicOsc !== null) {
-        try {
-          this.musicOsc.stop();
-          this.musicOsc.disconnect();
-        } catch {
-          // Ignore stop errors
-        }
-        this.musicOsc = null;
-      }
-      if (this.musicGain !== null) {
-        try {
-          this.musicGain.disconnect();
-        } catch {
-          // Ignore disconnect errors
-        }
-        this.musicGain = null;
-      }
-      return;
-    }
-
-    if (this.musicOsc === null || this.musicGain === null) {
-      try {
-        const osc = this.ctx.createOscillator();
-        const filter = this.ctx.createBiquadFilter();
-        const gain = this.ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = 146.83; // Soft warm D3 lounge drone
-        filter.type = 'lowpass';
-        filter.frequency.value = 320;
-        gain.gain.value = gainValue;
-        osc.connect(filter);
-        filter.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        this.musicOsc = osc;
-        this.musicGain = gain;
-      } catch {
-        // Ignore audio node errors
-      }
-    } else {
-      this.musicGain.gain.setTargetAtTime(gainValue, this.ctx.currentTime, 0.08);
-    }
-  }
-
-  private playTone(params: {
-    readonly channel: 'chips' | 'cards' | 'timer';
-    readonly freq: number;
-    readonly endFreq?: number;
-    readonly type: OscillatorType;
-    readonly duration: number;
-    readonly delay?: number;
-    readonly gainScale?: number;
-  }): void {
-    if (!this.unlocked || this.ctx === null) {
-      return;
-    }
-    const baseGain = this.effectiveGain(params.channel);
-    if (baseGain <= 0) {
-      return;
-    }
-
-    try {
-      const startTime = this.ctx.currentTime + (params.delay ?? 0);
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = params.type;
-      osc.frequency.setValueAtTime(params.freq, startTime);
-      if (params.endFreq !== undefined) {
-        osc.frequency.exponentialRampToValueAtTime(
-          Math.max(40, params.endFreq),
-          startTime + params.duration,
-        );
-      }
-
-      const peak = baseGain * (params.gainScale ?? 1);
-      gain.gain.setValueAtTime(0.0001, startTime);
-      gain.gain.linearRampToValueAtTime(peak, startTime + 0.006);
-      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + params.duration);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-      osc.start(startTime);
-      osc.stop(startTime + params.duration + 0.01);
-    } catch {
-      // Non-fatal in restricted audio environments
-    }
+    return this.audio.unlockFromUserGesture();
   }
 
   public playChip(denom: Denomination): void {
-    const tone = CHIP_TONES[denom];
-    this.playTone({
-      channel: 'chips',
-      freq: tone.freq,
-      endFreq: tone.freq * 0.92,
-      type: 'triangle',
-      duration: tone.decay,
-      gainScale: 0.9,
-    });
-    this.playTone({
-      channel: 'chips',
-      freq: tone.harmonic,
-      endFreq: tone.harmonic * 0.88,
-      type: 'sine',
-      duration: tone.decay * 0.55,
-      gainScale: 0.35,
-    });
+    this.sounds.playChip(denom);
   }
 
   public playCardDeal(cardCount = 1): void {
-    const count = Math.min(3, Math.max(1, cardCount));
-    for (let i = 0; i < count; i++) {
-      this.playTone({
-        channel: 'cards',
-        freq: 520 + i * 70,
-        endFreq: 190,
-        type: 'triangle',
-        duration: 0.06,
-        delay: i * 0.075,
-        gainScale: 0.75,
-      });
-    }
+    this.sounds.playCardDeal(Math.min(3, Math.max(1, cardCount)));
   }
 
   public playOutOfTurnAlert(): void {
-    this.playTone({
-      channel: 'chips',
-      freq: 660,
-      endFreq: 880,
-      type: 'sine',
-      duration: 0.11,
-      gainScale: 0.75,
-    });
+    this.sounds.playOutOfTurn();
   }
 
   public playPayoutFanfare(): void {
-    const notes = [523.25, 659.25, 783.99];
-    notes.forEach((freq, idx) => {
-      this.playTone({
-        channel: 'chips',
-        freq,
-        type: 'triangle',
-        duration: 0.16,
-        delay: idx * 0.07,
-        gainScale: 0.85,
-      });
-    });
+    this.sounds.playPayoutFanfare();
   }
 
   public playTimerTick(urgent = false): void {
-    this.playTone({
-      channel: 'timer',
-      freq: urgent ? 1180 : 880,
-      endFreq: urgent ? 920 : 700,
-      type: 'square',
-      duration: 0.045,
-      gainScale: urgent ? 0.8 : 0.55,
-    });
+    this.sounds.playTimerTick(urgent);
   }
 
-  /**
-   * Plays an appropriate sound for a timeline event ONCE per unique `eventKey`.
-   * Returns `true` if the event was newly processed (false if already played / deduplicated).
-   */
+  public setSeatPan(map: Record<string, number>): void {
+    this.seatPan = new Map(
+      Object.entries(map)
+        .filter(([, pan]) => Number.isFinite(pan))
+        .map(([playerId, pan]) => [playerId, Math.max(-1, Math.min(1, pan))]),
+    );
+  }
+
+  public playHeroTurnCue(): void {
+    this.sounds.playHeroTurn();
+  }
+
+  /** Returns true on the first observation, even when sound is unavailable. */
   public playTimelineEventOnce(eventKey: string, event: HandTimelineEvent): boolean {
-    if (this.playedKeys.has(eventKey)) {
-      return false;
-    }
+    if (this.playedKeys.has(eventKey)) return false;
     this.playedKeys.add(eventKey);
 
     switch (event.type) {
       case 'ante-collected':
-        this.playChip(5);
+        event.playerIds.forEach((id, i) => {
+          this.sounds.playChips({ ...emptyChips(), 5: 1 }, { pan: this.pan(id), delay: i * 0.027 });
+        });
         break;
       case 'cards-dealt':
-        this.playCardDeal(2);
+        this.sounds.playCardDeal(2, this.pan(event.dealerPlayerId));
         break;
       case 'street-dealt':
-        this.playCardDeal(event.cards.length);
+        this.sounds.playCardDeal(event.cards.length);
         break;
       case 'out-of-turn-declared':
-        this.playOutOfTurnAlert();
+        this.sounds.playOutOfTurn(this.pan(event.playerId));
         break;
-      case 'player-action':
-        if (event.addedAmount >= 50) {
-          this.playChip(50);
-        } else if (event.addedAmount >= 10) {
-          this.playChip(10);
-        } else if (event.addedAmount > 0) {
-          this.playChip(5);
-        } else if (event.action.type === 'fold') {
-          this.playCardDeal(1);
-        }
+      case 'out-of-turn-cancelled':
+        this.sounds.playChips(event.returnedChips, { pan: this.pan(event.playerId) });
         break;
+      case 'player-action': {
+        const pan = this.pan(event.playerId);
+        if (event.action.type === 'check') this.sounds.playCheck(pan);
+        else if (event.action.type === 'fold') this.sounds.playMuck(pan);
+        else if (event.isAllIn) this.sounds.playAllIn(event.action.chips, pan);
+        else this.sounds.playChips(event.action.chips, { pan });
+        break;
+      }
       case 'chip-exchange':
-        this.playChip(10);
+        this.sounds.playChips(event.give, { pan: this.pan(event.fromPlayerId) });
+        this.sounds.playChips(event.receive, {
+          pan: event.target.kind === 'player' ? this.pan(event.target.playerId) : 0,
+          delay: 0.085,
+        });
+        break;
+      case 'uncalled-refund':
+        this.sounds.playChips(event.chips, { pan: this.pan(event.playerId) });
+        break;
+      case 'fold-win':
+        this.queueFoldWin(event);
         break;
       case 'payout-settled':
-      case 'fold-win':
-        this.playPayoutFanfare();
+        if (event.transfers.some(({ playerId }) => playerId === this.pendingFoldWin?.winnerId)) {
+          this.pendingFoldWin = null;
+        }
+        this.sounds.playPotPush(
+          event.transfers.map(({ playerId, chips }) => ({ chips, pan: this.pan(playerId) })),
+        );
         break;
       case 'showdown':
-        this.playCardDeal(2);
-        break;
-      default:
+        this.sounds.playShowdown();
         break;
     }
     return true;
   }
 
   public dispose(): void {
-    if (this.musicOsc !== null) {
-      try {
-        this.musicOsc.stop();
-        this.musicOsc.disconnect();
-      } catch {
-        // Ignore
-      }
-      this.musicOsc = null;
-    }
-    if (this.ctx !== null) {
-      void this.ctx.close().catch(() => {
-        // Ignore
-      });
-      this.ctx = null;
-    }
-    this.unlocked = false;
+    this.pendingFoldWin = null;
+    this.audio.dispose();
+  }
+
+  private pan(playerId: string): number {
+    return this.seatPan.get(playerId) ?? 0;
+  }
+
+  private queueFoldWin(win: { winnerId: string; amount: number }): void {
+    if (!this.isUnlocked()) return;
+    // A normal fold win and its settlement arrive in the same timeline pass.
+    this.pendingFoldWin = win;
+    queueMicrotask(() => {
+      if (this.pendingFoldWin !== win) return;
+      this.pendingFoldWin = null;
+      this.sounds.playPotPush([], { amount: win.amount, pan: this.pan(win.winnerId) });
+    });
   }
 }
