@@ -15,11 +15,17 @@ interface FallbackSceneProps {
   readonly phase: ScenePhase;
   readonly highlight: LessonHighlight;
   readonly spot: SceneTableSnapshot;
+  readonly reducedMotion?: boolean;
 }
 
 const SVG_BOARD_XS: readonly number[] = [0, 44, 88, 132, 182];
 
-export function FallbackScene({ phase, highlight, spot }: FallbackSceneProps) {
+export function FallbackScene({
+  phase,
+  highlight,
+  spot,
+  reducedMotion = false,
+}: FallbackSceneProps) {
   const isLive = isLiveSnapshot(spot);
   const effectiveHighlight = getEffectiveHighlight(spot, highlight);
   const showOuts = shouldShowOuts(spot, highlight);
@@ -32,37 +38,44 @@ export function FallbackScene({ phase, highlight, spot }: FallbackSceneProps) {
   const occupiedList = getOccupiedRivals(spot);
   const occupied = new Set<SceneRival>(occupiedList);
   const activeRival = spot.live?.activeRival ?? null;
+  const allowLiveMotion = isLive && !reducedMotion;
 
-  // Subtle lean-in offsets toward the table center when a rival is active in Live mode
-  const caLeanX = isLive && activeRival === 'ca' ? 6 : 0;
-  const caLeanY = isLive && activeRival === 'ca' ? 7 : 0;
-  const caoLeanY = isLive && activeRival === 'cao' ? 8 : 0;
-  const nongLeanX = isLive && activeRival === 'nong' ? -6 : 0;
-  const nongLeanY = isLive && activeRival === 'nong' ? 7 : 0;
+  // Subtle lean-in offsets toward the table center when a rival is active in Live mode (disabled on reducedMotion)
+  const caLeanX = allowLiveMotion && activeRival === 'ca' ? 6 : 0;
+  const caLeanY = allowLiveMotion && activeRival === 'ca' ? 7 : 0;
+  const caoLeanY = allowLiveMotion && activeRival === 'cao' ? 8 : 0;
+  const nongLeanX = allowLiveMotion && activeRival === 'nong' ? -6 : 0;
+  const nongLeanY = allowLiveMotion && activeRival === 'nong' ? 7 : 0;
 
-  // Neutral gaze shift toward the active player in Live mode (no inferred tells)
+  // Neutral gaze shift toward the active player in Live mode (no inferred tells; zeroed on reducedMotion)
   const caPupilDx = isLive
-    ? activeRival === 'cao' || activeRival === 'nong'
-      ? 2.2
-      : activeRival === null && spot.live?.activePlayerName
-        ? -1.2
-        : 0.6
+    ? reducedMotion
+      ? 0
+      : activeRival === 'cao' || activeRival === 'nong'
+        ? 2.2
+        : activeRival === null && spot.live?.activePlayerName
+          ? -1.2
+          : 0.6
     : isDecision
       ? 1
       : 0;
   const caoPupilDx = isLive
-    ? activeRival === 'ca'
-      ? -2.2
-      : activeRival === 'nong'
-        ? 2.2
-        : 0
+    ? reducedMotion
+      ? 0
+      : activeRival === 'ca'
+        ? -2.2
+        : activeRival === 'nong'
+          ? 2.2
+          : 0
     : 0;
   const nongPupilDx = isLive
-    ? activeRival === 'ca' || activeRival === 'cao'
-      ? -2.2
-      : activeRival === null && spot.live?.activePlayerName
-        ? 1.2
-        : -0.6
+    ? reducedMotion
+      ? 0
+      : activeRival === 'ca' || activeRival === 'cao'
+        ? -2.2
+        : activeRival === null && spot.live?.activePlayerName
+          ? 1.2
+          : -0.6
     : 0;
 
   const potChipStacks = isLive ? buildChipStacksForAmount(spot.pot).slice(0, 3) : [];
@@ -107,48 +120,50 @@ export function FallbackScene({ phase, highlight, spot }: FallbackSceneProps) {
         <rect x="0" y="212" width="640" height="208" fill="#DFCCB0" opacity="0.55" />
         <rect x="0" y="208" width="640" height="6" fill="#C9B292" />
 
-        {/* Subtle framed wall prints */}
-        <g opacity="0.5">
-          <rect
-            x="92"
-            y="34"
-            width="46"
-            height="58"
-            rx="4"
-            fill="#FAF4E8"
-            stroke="#533C31"
-            strokeWidth="3"
-          />
-          <text x="115" y="71" textAnchor="middle" fontSize="24" fill="#3E5768">
-            ♠
-          </text>
-          <rect
-            x="297"
-            y="26"
-            width="46"
-            height="58"
-            rx="4"
-            fill="#FAF4E8"
-            stroke="#533C31"
-            strokeWidth="3"
-          />
-          <text x="320" y="63" textAnchor="middle" fontSize="24" fill="#C95849">
-            ♥
-          </text>
-          <rect
-            x="502"
-            y="34"
-            width="46"
-            height="58"
-            rx="4"
-            fill="#FAF4E8"
-            stroke="#533C31"
-            strokeWidth="3"
-          />
-          <text x="525" y="71" textAnchor="middle" fontSize="24" fill="#D18244">
-            ♦
-          </text>
-        </g>
+        {/* Subtle framed wall prints (Drill decorative backdrop only; omitted in live mode so nothing floats behind character heads) */}
+        {!isLive && (
+          <g opacity="0.5" data-wall-prints="drill">
+            <rect
+              x="92"
+              y="34"
+              width="46"
+              height="58"
+              rx="4"
+              fill="#FAF4E8"
+              stroke="#533C31"
+              strokeWidth="3"
+            />
+            <text x="115" y="71" textAnchor="middle" fontSize="24" fill="#3E5768">
+              ♠
+            </text>
+            <rect
+              x="297"
+              y="26"
+              width="46"
+              height="58"
+              rx="4"
+              fill="#FAF4E8"
+              stroke="#533C31"
+              strokeWidth="3"
+            />
+            <text x="320" y="63" textAnchor="middle" fontSize="24" fill="#C95849">
+              ♥
+            </text>
+            <rect
+              x="502"
+              y="34"
+              width="46"
+              height="58"
+              rx="4"
+              fill="#FAF4E8"
+              stroke="#533C31"
+              strokeWidth="3"
+            />
+            <text x="525" y="71" textAnchor="middle" fontSize="24" fill="#D18244">
+              ♦
+            </text>
+          </g>
+        )}
 
         {/* --- OCCUPIED RIVAL CHARACTERS AROUND THE OVAL TABLE --- */}
 

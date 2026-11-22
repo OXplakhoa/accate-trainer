@@ -170,7 +170,12 @@ export function DrillScene({ phase, highlight, spot, reducedMotion }: DrillScene
       {/* 3D WebGL stage or accessible 2D SVG fallback */}
       <div className="drill3d-stage" ref={stageRef}>
         {webglFailed && (
-          <FallbackScene phase={phase} highlight={effectiveHighlight} spot={spot} />
+          <FallbackScene
+            phase={phase}
+            highlight={effectiveHighlight}
+            spot={spot}
+            reducedMotion={reducedMotion}
+          />
         )}
       </div>
 
