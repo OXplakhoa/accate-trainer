@@ -376,22 +376,93 @@ describe('L2 3D look and lighting polish', () => {
     }
 
     // Potted plant leaves must not sit behind Nóng's spout and steam in the decision camera
+    const { getLiveCharacterPose, PHASE_CHARACTER_POSES } = await import(
+      '../../../src/ui/drill3d/scene/buildCharacters'
+    );
     const pottedPlant = room.getObjectByName('PropPottedPlant')!;
     const nong = characters.root.getObjectByName('CharacterNong')!;
-    const decisionCamPos = new THREE.Vector3(...CAMERA_PRESETS.decision.position);
-    nong.traverse((obj) => {
-      const mesh = obj as import('three').Mesh;
-      if (!mesh.isMesh) {
-        return;
-      }
-      const center = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
-      const dir = center.clone().sub(decisionCamPos).normalize();
-      raycaster.set(decisionCamPos, dir);
-      raycaster.near = 0.1;
-      raycaster.far = 15;
-      const plantHits = raycaster.intersectObject(pottedPlant, true);
-      expect(plantHits).toHaveLength(0);
-    });
+    const decisionPreset = CAMERA_PRESETS.decision;
+    const decisionCamPos = new THREE.Vector3(...decisionPreset.position);
+
+    const screenWidth = 390;
+    const screenHeight = 844;
+    const aspect = screenWidth / screenHeight;
+    const minHRad = THREE.MathUtils.degToRad(decisionPreset.minHFov);
+    const adaptiveVFov = Math.min(
+      60,
+      Math.max(
+        decisionPreset.baseFov,
+        THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(minHRad / 2) / aspect)),
+      ),
+    );
+    const decisionCamera = new THREE.PerspectiveCamera(adaptiveVFov, aspect, 0.1, 32);
+    decisionCamera.position.set(...decisionPreset.position);
+    decisionCamera.lookAt(...decisionPreset.target);
+    decisionCamera.updateMatrixWorld(true);
+    decisionCamera.updateProjectionMatrix();
+
+    const projectScreenBox = (targetObj: import('three').Object3D) => {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      const worldV = new THREE.Vector3();
+      targetObj.traverse((child) => {
+        const mesh = child as import('three').Mesh;
+        if (!mesh.isMesh || !mesh.geometry) {
+          return;
+        }
+        const pos = mesh.geometry.attributes.position;
+        if (!pos) {
+          return;
+        }
+        for (let i = 0; i < pos.count; i += 1) {
+          worldV.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld).project(decisionCamera);
+          const sx = (worldV.x * 0.5 + 0.5) * screenWidth;
+          const sy = (-worldV.y * 0.5 + 0.5) * screenHeight;
+          if (sx < minX) minX = sx;
+          if (sx > maxX) maxX = sx;
+          if (sy < minY) minY = sy;
+          if (sy > maxY) maxY = sy;
+        }
+      });
+      return { minX, maxX, minY, maxY };
+    };
+
+    const plantScreenBox = projectScreenBox(pottedPlant);
+    for (const pose of [
+      PHASE_CHARACTER_POSES.decision,
+      getLiveCharacterPose(null, true, 'flop'),
+      getLiveCharacterPose('nong', false, 'flop'),
+    ]) {
+      characters.applyPose(pose);
+      characters.root.updateMatrixWorld(true);
+
+      const nongScreenBox = projectScreenBox(nong);
+      expect(plantScreenBox.minX).toBeGreaterThan(nongScreenBox.maxX);
+
+      nong.traverse((obj) => {
+        const mesh = obj as import('three').Mesh;
+        if (!mesh.isMesh) {
+          return;
+        }
+        const meshScreenBox = projectScreenBox(mesh);
+        const overlaps2D =
+          meshScreenBox.maxX >= plantScreenBox.minX &&
+          meshScreenBox.minX <= plantScreenBox.maxX &&
+          meshScreenBox.maxY >= plantScreenBox.minY &&
+          meshScreenBox.minY <= plantScreenBox.maxY;
+        expect(overlaps2D).toBe(false);
+
+        const center = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+        const dir = center.clone().sub(decisionCamPos).normalize();
+        raycaster.set(decisionCamPos, dir);
+        raycaster.near = 0.1;
+        raycaster.far = 15;
+        const plantHits = raycaster.intersectObject(pottedPlant, true);
+        expect(plantHits).toHaveLength(0);
+      });
+    }
 
     // Mobile performance: clock ticks batched in one InstancedMesh, shared hand geometries, FrontSide leaves, reduced shadow casters
     const wallClock = room.getObjectByName('PropWallClock')!;

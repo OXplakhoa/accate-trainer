@@ -248,10 +248,10 @@ export class DrillSceneController {
     this.scene.add(tableSpot);
     this.scene.add(tableSpot.target);
 
-    // Localized front-table fill positioned ahead of the near rail (z = 2.36, distance = 5.65) so
-    // both the near rail wood grain and rival faces stay crisp without reaching the back wall
-    const characterFill = new THREE.PointLight(0xffe8c6, 2.15, 5.65, 1.45);
-    characterFill.position.set(0, 0.92, 2.36);
+    // Localized front-table fill positioned low and ahead of the near rail (z = 3.45, distance = 5.65)
+    // so the full camera-facing near rail band and rival faces stay crisp without reaching the back wall
+    const characterFill = new THREE.PointLight(0xffe8c6, 6.6, 5.65, 1.45);
+    characterFill.position.set(0, 0.5, 3.45);
     this.scene.add(characterFill);
 
     // Localized short-range window-alcove bounce illuminating the tea cabinet woodwork & brass pulls

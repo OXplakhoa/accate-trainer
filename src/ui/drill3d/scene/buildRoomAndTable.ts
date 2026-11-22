@@ -636,7 +636,7 @@ export function buildRoomAndTable(): THREE.Group {
   root.add(teaCabinet);
 
   const pottedPlant = buildPottedPlant(cabinetWoodMat, cabinetDarkMat);
-  pottedPlant.position.set(4.52, floorY, -3.26);
+  pottedPlant.position.set(4.84, floorY, -3.16);
   root.add(pottedPlant);
 
   const wallClock = buildWallClock(cabinetDarkMat, brassMat);
