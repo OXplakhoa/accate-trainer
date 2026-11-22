@@ -73,6 +73,10 @@ body {
     align-items: start;
   }
 
+  .accate-sandbox-3d-preview .sb-chip-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .accate-sandbox-3d-preview .sb-seats-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
