@@ -28,6 +28,29 @@ describe('chip pile resources and layout', () => {
       random.mockRestore();
     }
   });
+
+  it('does not dispose shared THREE.Sprite geometry while still disposing sprite material and map', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const THREE = await import('three');
+      const { disposeObject3DResources } = await import('../../../src/ui/drill3d/scene/palette');
+      const map = new THREE.Texture();
+      const mat = new THREE.SpriteMaterial({ map });
+      const sprite = new THREE.Sprite(mat);
+
+      const geoDispose = vi.spyOn(sprite.geometry, 'dispose');
+      const matDispose = vi.spyOn(mat, 'dispose');
+      const mapDispose = vi.spyOn(map, 'dispose');
+
+      disposeObject3DResources(sprite);
+
+      expect(geoDispose).not.toHaveBeenCalled();
+      expect(matDispose).toHaveBeenCalledOnce();
+      expect(mapDispose).toHaveBeenCalledOnce();
+    } finally {
+      random.mockRestore();
+    }
+  });
 });
 
 vi.mock('../../../src/ui/drill3d/scene/textures', async () => {

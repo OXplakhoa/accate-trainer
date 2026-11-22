@@ -126,7 +126,8 @@ export function disposeObject3DResources(
       instanced.dispose();
     }
     const mesh = obj as THREE.Mesh;
-    if (mesh.geometry && typeof mesh.geometry.dispose === 'function') {
+    const sprite = obj as THREE.Sprite;
+    if (!sprite.isSprite && mesh.geometry && typeof mesh.geometry.dispose === 'function') {
       geometries.add(mesh.geometry);
     }
     const matOrList = mesh.material;

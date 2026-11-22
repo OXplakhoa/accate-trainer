@@ -4,7 +4,7 @@ import { buildChipStacks, buildChipStacksForAmount } from '../../../src/ui/drill
 import { drawSuitSymbol } from '../../../src/ui/drill3d/scene/textures';
 import { toLiveSceneSnapshot } from '../../../src/ui/liveSandbox3d/snapshot';
 import { buildSandboxTableView } from '../../../src/ui/sandbox/tableView';
-import { createSandboxSession, enterHandBoundary, getHeroActionValidation, isSeatCardsRevealed, performHeroAction, stageChip, stepOneBotTurn } from '../../../src/ui/sandbox/controller';
+import { createSandboxSession, enterHandBoundary, getHeroActionValidation, isSeatCardsRevealed, performHeroAction, stageChip, startNextHand, stepOneBotTurn } from '../../../src/ui/sandbox/controller';
 
 vi.mock('three', () => ({}));
 
@@ -70,6 +70,30 @@ describe('physical chips and public view', () => {
     }
     expect(view.seats.some(seat => seat.status === 'out')).toBe(true);
     expect(view.seats.some(seat => seat.status === 'active')).toBe(true);
+    expect(view.dealerSeatId).toBeNull();
+  });
+
+  it('exposes dealerSeatId from hand.dealerSeatIndex, rotates across hands, and clears between hands', () => {
+    let session = createSandboxSession({ seed: 'sandbox3d-1', settings });
+    const hand1View = buildSandboxTableView(session, 0, false);
+    const hand1Dealer = session.hand!.seats.find(s => s.seatIndex === session.hand!.dealerSeatIndex)!.playerId;
+    expect(hand1View.dealerSeatId).toBe(hand1Dealer);
+    expect(toLiveSceneSnapshot(hand1View).live?.dealerSeatId).toBe(hand1Dealer);
+
+    for (let i = 0; i < 100 && session.hand?.phase === 'betting'; i++) {
+      session = session.hand.activePlayerId === 'hero' ? performHeroAction(session, 'fold') : stepOneBotTurn(session);
+    }
+    const boundary = enterHandBoundary(session);
+    const boundaryView = buildSandboxTableView(boundary, 0, false);
+    expect(boundaryView.dealerSeatId).toBeNull();
+    expect(toLiveSceneSnapshot(boundaryView).live?.dealerSeatId).toBeNull();
+
+    const hand2 = startNextHand(boundary);
+    const hand2View = buildSandboxTableView(hand2, 0, false);
+    const hand2Dealer = hand2.hand!.seats.find(s => s.seatIndex === hand2.hand!.dealerSeatIndex)!.playerId;
+    expect(hand2View.dealerSeatId).toBe(hand2Dealer);
+    expect(hand2View.dealerSeatId).not.toBe(hand1View.dealerSeatId);
+    expect(toLiveSceneSnapshot(hand2View).live?.dealerSeatId).toBe(hand2Dealer);
   });
 
   it('tracks seat actions and resets physical street chips on the flop', () => {

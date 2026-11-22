@@ -15,6 +15,7 @@ export function toLiveSceneSnapshot(view: SandboxTableView): SceneTableSnapshot 
       potChips: view.potChips,
       handNumber: view.handNumber,
       timelineLength: view.timelineLength,
+      dealerSeatId: view.dealerSeatId,
       seats: view.seats,
       payoutTransfers: view.payoutTransfers,
       street: view.street,

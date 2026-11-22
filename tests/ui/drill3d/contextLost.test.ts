@@ -26,7 +26,7 @@ interface StubContainer {
   getBoundingClientRect(): { width: number; height: number };
 }
 
-const { createStubCanvas, rendererSpies } = vi.hoisted(() => {
+const { createStubCanvas, rendererSpies, tabletopSpies } = vi.hoisted(() => {
   function makeStubCanvas(): StubCanvas {
     const listeners = new Map<string, Set<(event: Event) => void>>();
     return {
@@ -73,6 +73,14 @@ const { createStubCanvas, rendererSpies } = vi.hoisted(() => {
       render: vi.fn(),
       setSize: vi.fn(),
       setPixelRatio: vi.fn(),
+    },
+    tabletopSpies: {
+      active: false,
+      updateSpot: vi.fn(),
+      updateHighlight: vi.fn(),
+      playAnimations: vi.fn(),
+      stepAnimations: vi.fn(),
+      snapAnimations: vi.fn(),
     },
   };
 });
@@ -254,8 +262,22 @@ vi.mock('../../../src/ui/drill3d/scene/buildCharacters', () => ({
 vi.mock('../../../src/ui/drill3d/scene/buildTabletop', () => ({
   buildTabletop: () => ({
     root: { traverse: vi.fn() },
-    updateSpot: vi.fn(),
-    updateHighlight: vi.fn(),
+    updateSpot: (spot: unknown) => tabletopSpies.updateSpot(spot),
+    updateHighlight: (h: unknown) => tabletopSpies.updateHighlight(h),
+    playAnimations: (anims: unknown, now: number) => {
+      tabletopSpies.active = true;
+      tabletopSpies.playAnimations(anims, now);
+    },
+    stepAnimations: (now: number) => {
+      const keepGoing = tabletopSpies.stepAnimations(now) ?? false;
+      tabletopSpies.active = keepGoing;
+      return keepGoing;
+    },
+    snapAnimations: () => {
+      tabletopSpies.active = false;
+      tabletopSpies.snapAnimations();
+    },
+    hasActiveAnimations: () => tabletopSpies.active,
   }),
 }));
 
@@ -273,6 +295,12 @@ describe('DrillScene WebGL context loss disposal lifecycle', () => {
     rendererSpies.render.mockReset();
     rendererSpies.setSize.mockReset();
     rendererSpies.setPixelRatio.mockReset();
+    tabletopSpies.active = false;
+    tabletopSpies.updateSpot.mockReset();
+    tabletopSpies.updateHighlight.mockReset();
+    tabletopSpies.playAnimations.mockReset();
+    tabletopSpies.stepAnimations.mockReset();
+    tabletopSpies.snapAnimations.mockReset();
     vi.stubGlobal('window', { devicePixelRatio: 1 });
     vi.stubGlobal('requestAnimationFrame', () => 1);
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
@@ -394,5 +422,97 @@ describe('DrillScene WebGL context loss disposal lifecycle', () => {
 
     expect(disposeManagedController(controllerRef)).toBe(false);
     expect(rendererSpies.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('plays initial deal once on mount, enforces monotonic progress (3 -> 4 -> 3 -> 4), and snaps mid-flight on reducedMotion', async () => {
+    vi.spyOn(globalThis.performance, 'now').mockReturnValue(100);
+    const { DrillSceneController } = await import('../../../src/ui/drill3d/scene/sceneController');
+    const rafQueue: ((now: number) => void)[] = [];
+    let nextRafId = 1;
+    const cancelRaf = vi.fn();
+    vi.stubGlobal('requestAnimationFrame', (cb: (now: number) => void) => {
+      rafQueue.push(cb);
+      return nextRafId++;
+    });
+    vi.stubGlobal('cancelAnimationFrame', cancelRaf);
+
+    const makeLiveState = (
+      timelineLength: number,
+      street: 'preflop' | 'flop',
+      board: readonly string[],
+      caoBet: number,
+      reducedMotion = false,
+    ): SceneControllerState => ({
+      phase: 'decision',
+      highlight: null,
+      reducedMotion,
+      spot: {
+        pot: 20 + caoBet,
+        call: caoBet,
+        heroCards: ['A♥', 'K♦'],
+        board,
+        live: {
+          potChips: { 5: 4 + (caoBet > 0 ? 1 : 0), 10: caoBet > 0 ? 3 : 0, 50: 0, 100: 0 },
+          handNumber: 1,
+          timelineLength,
+          dealerSeatId: 'hero',
+          street,
+          occupiedRivals: ['ca', 'cao', 'nong'],
+          activeRival: 'cao',
+          activePlayerName: 'Cáo',
+          payoutTransfers: [],
+          seats: [
+            { id: 'hero', stackChips: { 5: 20, 10: 20, 50: 4, 100: 0 }, streetChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, status: 'active', lastAction: null, isActor: false, isWinner: false, revealedCards: ['A♥', 'K♦'] },
+            { id: 'ca', stackChips: { 5: 20, 10: 20, 50: 4, 100: 0 }, streetChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, status: 'active', lastAction: null, isActor: false, isWinner: false, revealedCards: null },
+            { id: 'cao', stackChips: { 5: 20 - (caoBet > 0 ? 1 : 0), 10: 20 - (caoBet > 0 ? 3 : 0), 50: 4, 100: 0 }, streetChips: { 5: caoBet > 0 ? 1 : 0, 10: caoBet > 0 ? 3 : 0, 50: 0, 100: 0 }, status: 'active', lastAction: caoBet > 0 ? { type: 'bet', amount: caoBet } : null, isActor: caoBet === 0, isWinner: false, revealedCards: null },
+            { id: 'nong', stackChips: { 5: 20, 10: 20, 50: 4, 100: 0 }, streetChips: { 5: 0, 10: 0, 50: 0, 100: 0 }, status: 'active', lastAction: null, isActor: false, isWinner: false, revealedCards: null },
+          ],
+        },
+      },
+    });
+
+    const container = createStubContainer();
+    // Initial preflop empty-board live snapshot plays deal once on mount
+    const snap3 = makeLiveState(3, 'preflop', [], 0);
+    const controller = new DrillSceneController(
+      container as unknown as HTMLElement,
+      snap3,
+      vi.fn(),
+    );
+    expect(tabletopSpies.playAnimations).toHaveBeenCalledTimes(1);
+    expect(rafQueue).toHaveLength(1);
+
+    // Complete initial deal rAF tick -> loop stops cleanly
+    tabletopSpies.stepAnimations.mockReturnValueOnce(false);
+    rafQueue.shift()!(1000);
+    expect(rafQueue).toHaveLength(0);
+
+    // 3 -> 4: Cáo bets 35 -> plays once
+    const snap4 = makeLiveState(4, 'preflop', [], 35);
+    tabletopSpies.stepAnimations.mockReturnValue(true);
+    controller.update(snap4);
+    expect(tabletopSpies.playAnimations).toHaveBeenCalledTimes(2);
+    expect(rafQueue).toHaveLength(1);
+
+    // 4 -> 3 (stale): snaps without playing animations and does NOT lower high-water
+    controller.update(snap3);
+    expect(tabletopSpies.playAnimations).toHaveBeenCalledTimes(2);
+    expect(tabletopSpies.snapAnimations).toHaveBeenCalled();
+
+    // 3 -> 4 again: must NOT replay Cáo's Bet 35
+    controller.update(snap4);
+    expect(tabletopSpies.playAnimations).toHaveBeenCalledTimes(2);
+
+    // Turning reducedMotion on mid-flight cancels rAF and snaps immediately
+    const snap5 = makeLiveState(5, 'preflop', [], 35);
+    tabletopSpies.playAnimations.mockClear();
+    tabletopSpies.snapAnimations.mockClear();
+    // Advance with a fold or call on another seat via snap4 -> reducedMotion toggle during an active animation
+    tabletopSpies.active = true;
+    controller.update({ ...snap5, reducedMotion: true });
+    expect(tabletopSpies.snapAnimations).toHaveBeenCalled();
+    expect(cancelRaf).toHaveBeenCalled();
+
+    controller.dispose();
   });
 });
