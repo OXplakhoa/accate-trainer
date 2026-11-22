@@ -51,8 +51,8 @@ export const SCENE_COLORS = {
   heroSkin: 0xe0b692,
 
   // Home-game room props
-  propCabinetWood: 0x724e38,
-  propCabinetDark: 0x4f3526,
+  propCabinetWood: 0xb07d58,
+  propCabinetDark: 0x8a5e42,
   propCeladon: 0xa6d2be,
   propPlanter: 0xc46f50,
   propLeaf: 0x48805e,
@@ -98,18 +98,23 @@ export function createMatteMaterial(
   color: number,
   options: MatteMaterialOptions = {},
 ): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
+  const params: THREE.MeshStandardMaterialParameters = {
     color,
     roughness: options.roughness ?? 0.86,
     metalness: options.metalness ?? 0.03,
-    emissive: options.emissive !== undefined ? new THREE.Color(options.emissive) : undefined,
     emissiveIntensity: options.emissiveIntensity ?? 0,
-    map: options.map,
     transparent: options.transparent ?? false,
     opacity: options.opacity ?? 1,
     side: options.side ?? THREE.FrontSide,
     depthWrite: options.depthWrite ?? true,
-  });
+  };
+  if (options.emissive !== undefined) {
+    params.emissive = new THREE.Color(options.emissive);
+  }
+  if (options.map !== undefined) {
+    params.map = options.map;
+  }
+  return new THREE.MeshStandardMaterial(params);
 }
 
 export function disposeObject3DResources(
@@ -121,6 +126,10 @@ export function disposeObject3DResources(
   const textures = new Set<THREE.Texture>();
 
   root.traverse((obj) => {
+    const light = obj as THREE.Light;
+    if (light.isLight && typeof light.dispose === 'function') {
+      light.dispose();
+    }
     const instanced = obj as THREE.InstancedMesh;
     if (instanced.isInstancedMesh) {
       instanced.dispose();

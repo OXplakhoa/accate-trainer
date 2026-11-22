@@ -228,14 +228,15 @@ export class DrillSceneController {
   }
 
   private setupLights(): void {
-    // Low warm ambient bounce so outer room walls fall off into a cosy evening vignette
-    const hemiLight = new THREE.HemisphereLight(0xf6e6ce, 0x6b503b, 0.44);
+    // Warm ambient bounce lifted modestly so cabinet woodwork and near rail grain read clearly
+    // while outer room edges still fall off into a cosy evening vignette
+    const hemiLight = new THREE.HemisphereLight(0xf6e6ce, 0x8e6f54, 0.54);
     hemiLight.position.set(0, 6, 0);
     this.scene.add(hemiLight);
 
     // Warm overhead pendant lamp spotlight forming a distinct bright pool on the table felt
     // (the ONLY shadow-casting light, 1024x1024 map for mobile-friendly performance)
-    const tableSpot = new THREE.SpotLight(0xfff0d2, 9.6, 9.5, Math.PI * 0.35, 0.84, 1.5);
+    const tableSpot = new THREE.SpotLight(0xfff0d2, 10.2, 9.5, Math.PI * 0.35, 0.84, 1.5);
     tableSpot.position.set(0, 2.82, -0.12);
     tableSpot.target.position.set(0, 0, -0.12);
     tableSpot.castShadow = true;
@@ -247,15 +248,20 @@ export class DrillSceneController {
     this.scene.add(tableSpot);
     this.scene.add(tableSpot.target);
 
-    // Localized short-range front-table fill so Cá, Cáo and Nóng faces stay crisp and readable
-    // without illuminating the far room walls (distance = 5.1 cuts off before walls at z = -4.4)
-    const characterFill = new THREE.PointLight(0xffe8c6, 1.48, 5.1, 1.6);
-    characterFill.position.set(0, 1.42, 1.12);
+    // Localized front-table fill positioned ahead of the near rail (z = 2.36, distance = 5.65) so
+    // both the near rail wood grain and rival faces stay crisp without reaching the back wall
+    const characterFill = new THREE.PointLight(0xffe8c6, 2.15, 5.65, 1.45);
+    characterFill.position.set(0, 0.92, 2.36);
     this.scene.add(characterFill);
 
+    // Localized short-range window-alcove bounce illuminating the tea cabinet woodwork & brass pulls
+    const windowFill = new THREE.PointLight(0xffe8c6, 0.95, 3.2, 1.5);
+    windowFill.position.set(-3.35, 0.25, -2.55);
+    this.scene.add(windowFill);
+
     // Subtle warm window cross-rim accent for 3D form separation
-    const rimFill = new THREE.DirectionalLight(0xffe7c4, 0.26);
-    rimFill.position.set(-3.8, 3.2, 1.8);
+    const rimFill = new THREE.DirectionalLight(0xffe7c4, 0.3);
+    rimFill.position.set(-3.4, 3.0, 2.2);
     this.scene.add(rimFill);
   }
 

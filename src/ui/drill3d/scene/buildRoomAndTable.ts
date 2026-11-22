@@ -42,30 +42,34 @@ function createOvalPath(rx: number, rz: number, segments = 72): THREE.Path {
   return path;
 }
 
+interface SharedChairGeometries {
+  readonly seatGeo: THREE.CylinderGeometry;
+  readonly apronGeo: THREE.CylinderGeometry;
+  readonly legGeo: THREE.CylinderGeometry;
+}
+
 function buildChair(
   woodMat: THREE.MeshStandardMaterial,
   cushionMat: THREE.MeshStandardMaterial,
+  sharedGeos: SharedChairGeometries,
   options: { readonly lowBack?: boolean } = {},
 ): THREE.Group {
   const chair = new THREE.Group();
   const seatY = -0.34;
 
   // Seat cushion
-  const seatGeo = new THREE.CylinderGeometry(0.32, 0.34, 0.08, 20);
-  const seat = new THREE.Mesh(seatGeo, cushionMat);
+  const seat = new THREE.Mesh(sharedGeos.seatGeo, cushionMat);
   seat.position.y = seatY;
   seat.castShadow = true;
   seat.receiveShadow = true;
   chair.add(seat);
 
   // Wooden seat apron
-  const apronGeo = new THREE.CylinderGeometry(0.35, 0.33, 0.05, 20);
-  const apron = new THREE.Mesh(apronGeo, woodMat);
+  const apron = new THREE.Mesh(sharedGeos.apronGeo, woodMat);
   apron.position.y = seatY - 0.055;
   chair.add(apron);
 
   // 4 tapered legs
-  const legGeo = new THREE.CylinderGeometry(0.024, 0.018, 0.44, 10);
   const legOffsets: readonly [number, number][] = [
     [-0.22, -0.22],
     [0.22, -0.22],
@@ -73,7 +77,7 @@ function buildChair(
     [0.22, 0.22],
   ];
   for (const [lx, lz] of legOffsets) {
-    const leg = new THREE.Mesh(legGeo, woodMat);
+    const leg = new THREE.Mesh(sharedGeos.legGeo, woodMat);
     leg.position.set(lx, seatY - 0.26, lz);
     chair.add(leg);
   }
@@ -119,6 +123,7 @@ function buildSideCabinetWithTeaSet(
   cabinetWoodMat: THREE.MeshStandardMaterial,
   cabinetDarkMat: THREE.MeshStandardMaterial,
   brassMat: THREE.MeshStandardMaterial,
+  trayMat: THREE.MeshStandardMaterial,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = 'PropTeaCabinet';
@@ -127,7 +132,6 @@ function buildSideCabinetWithTeaSet(
     roughness: 0.58,
     metalness: 0.06,
   });
-  const trayMat = createMatteMaterial(SCENE_COLORS.tableRim, { roughness: 0.72 });
 
   // Low-poly tapered wooden legs
   const legGeo = new THREE.CylinderGeometry(0.032, 0.022, 0.22, 8);
@@ -143,26 +147,26 @@ function buildSideCabinetWithTeaSet(
     group.add(leg);
   }
 
-  // Cabinet carcass & overhanging top slab
+  // Cabinet carcass & overhanging top slab (outside spotlight cone -> castShadow = false)
   const carcass = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.64, 0.52), cabinetWoodMat);
   carcass.position.set(0, 0.52, 0);
-  carcass.castShadow = true;
   carcass.receiveShadow = true;
   group.add(carcass);
 
   const topSlab = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.05, 0.58), cabinetDarkMat);
   topSlab.position.set(0, 0.865, 0);
-  topSlab.castShadow = true;
   topSlab.receiveShadow = true;
   group.add(topSlab);
 
-  // Twin recessed front door panels with brass pulls
+  // Twin recessed front door panels with brass pulls (shared geometries)
+  const panelGeo = new THREE.BoxGeometry(0.52, 0.48, 0.03);
+  const knobGeo = new THREE.SphereGeometry(0.018, 8, 8);
   for (const sx of [-1, 1]) {
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.48, 0.03), cabinetDarkMat);
+    const panel = new THREE.Mesh(panelGeo, cabinetDarkMat);
     panel.position.set(sx * 0.29, 0.52, 0.255);
     group.add(panel);
 
-    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), brassMat);
+    const knob = new THREE.Mesh(knobGeo, brassMat);
     knob.position.set(sx * 0.07, 0.52, 0.28);
     group.add(knob);
   }
@@ -171,7 +175,6 @@ function buildSideCabinetWithTeaSet(
   const trayY = 0.89;
   const tray = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.23, 0.024, 18), trayMat);
   tray.position.set(-0.14, trayY + 0.012, 0.02);
-  tray.castShadow = true;
   group.add(tray);
 
   // Celadon Vietnamese teapot (ấm trà)
@@ -181,7 +184,6 @@ function buildSideCabinetWithTeaSet(
   const potBody = new THREE.Mesh(new THREE.SphereGeometry(0.082, 14, 12), celadonMat);
   potBody.scale.set(1.08, 0.86, 1.08);
   potBody.position.y = 0.068;
-  potBody.castShadow = true;
   teapot.add(potBody);
 
   const potLid = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.052, 0.02, 12), celadonMat);
@@ -216,14 +218,12 @@ function buildSideCabinetWithTeaSet(
   for (const [cx, cz] of cupOffsets) {
     const cup = new THREE.Mesh(cupGeo, celadonMat);
     cup.position.set(cx, trayY + 0.043, cz);
-    cup.castShadow = true;
     group.add(cup);
   }
 
   // Brass tea canister beside the tray
   const caddy = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.068, 0.16, 14), brassMat);
   caddy.position.set(0.32, trayY + 0.08, -0.04);
-  caddy.castShadow = true;
   group.add(caddy);
 
   const caddyLid = new THREE.Mesh(
@@ -236,19 +236,19 @@ function buildSideCabinetWithTeaSet(
   return group;
 }
 
-function buildPottedPlant(woodMat: THREE.MeshStandardMaterial): THREE.Group {
+function buildPottedPlant(
+  woodMat: THREE.MeshStandardMaterial,
+  soilMat: THREE.MeshStandardMaterial,
+): THREE.Group {
   const group = new THREE.Group();
   group.name = 'PropPottedPlant';
 
   const planterMat = createMatteMaterial(SCENE_COLORS.propPlanter, { roughness: 0.78 });
-  const soilMat = createMatteMaterial(SCENE_COLORS.propCabinetDark, { roughness: 0.95 });
   const leafMat = createMatteMaterial(SCENE_COLORS.propLeaf, {
     roughness: 0.76,
-    side: THREE.DoubleSide,
   });
   const leafLightMat = createMatteMaterial(SCENE_COLORS.propLeafLight, {
     roughness: 0.74,
-    side: THREE.DoubleSide,
   });
 
   // Low wooden plant stand
@@ -264,7 +264,7 @@ function buildPottedPlant(woodMat: THREE.MeshStandardMaterial): THREE.Group {
     group.add(leg);
   }
 
-  // Glazed terracotta planter pot
+  // Glazed terracotta planter pot (outside spotlight cone -> castShadow = false)
   const potProfile = [
     new THREE.Vector2(0.0, 0.0),
     new THREE.Vector2(0.18, 0.0),
@@ -275,7 +275,6 @@ function buildPottedPlant(woodMat: THREE.MeshStandardMaterial): THREE.Group {
   ];
   const potMesh = new THREE.Mesh(new THREE.LatheGeometry(potProfile, 18), planterMat);
   potMesh.position.y = 0.175;
-  potMesh.castShadow = true;
   potMesh.receiveShadow = true;
   group.add(potMesh);
 
@@ -283,7 +282,7 @@ function buildPottedPlant(woodMat: THREE.MeshStandardMaterial): THREE.Group {
   soil.position.y = 0.61;
   group.add(soil);
 
-  // Broad arching tropical parlor leaves
+  // Broad arching tropical parlor leaves (closed ExtrudeGeometry with FrontSide and castShadow = false)
   const leafShape = new THREE.Shape();
   leafShape.moveTo(0, 0);
   leafShape.quadraticCurveTo(0.14, 0.16, 0.13, 0.38);
@@ -314,7 +313,6 @@ function buildPottedPlant(woodMat: THREE.MeshStandardMaterial): THREE.Group {
     const leaf = new THREE.Mesh(leafGeo, spec.light ? leafLightMat : leafMat);
     leaf.rotation.x = spec.pitch;
     leaf.scale.setScalar(spec.scale);
-    leaf.castShadow = true;
     leafPivot.add(leaf);
     group.add(leafPivot);
   }
@@ -332,11 +330,10 @@ function buildWallClock(
   const faceMat = createMatteMaterial(SCENE_COLORS.ivory, { roughness: 0.82 });
   const handMat = createMatteMaterial(SCENE_COLORS.ink, { roughness: 0.6 });
 
-  // Wooden octagonal/round case bezel (no text or numerals)
+  // Wooden octagonal/round case bezel (no text or numerals, outside spotlight cone -> castShadow = false)
   const bezelGeo = new THREE.CylinderGeometry(0.32, 0.34, 0.06, 16);
   bezelGeo.rotateX(Math.PI / 2);
   const bezel = new THREE.Mesh(bezelGeo, woodMat);
-  bezel.castShadow = true;
   clock.add(bezel);
 
   const brassRim = new THREE.Mesh(new THREE.TorusGeometry(0.275, 0.016, 10, 24), brassMat);
@@ -349,18 +346,22 @@ function buildWallClock(
   dial.position.z = 0.028;
   clock.add(dial);
 
-  // 12 geometric brass hour ticks (zero text or logos)
-  const majorTickGeo = new THREE.BoxGeometry(0.016, 0.042, 0.01);
-  const minorTickGeo = new THREE.BoxGeometry(0.01, 0.026, 0.008);
+  // 12 geometric brass hour ticks batched into a single InstancedMesh (1 draw call, zero text/logos)
+  const tickGeo = new THREE.BoxGeometry(0.014, 0.034, 0.01);
+  const ticksMesh = new THREE.InstancedMesh(tickGeo, brassMat, 12);
+  const tickDummy = new THREE.Object3D();
   for (let i = 0; i < 12; i += 1) {
     const angle = (i / 12) * Math.PI * 2;
     const isMajor = i % 3 === 0;
-    const tick = new THREE.Mesh(isMajor ? majorTickGeo : minorTickGeo, brassMat);
     const r = 0.215;
-    tick.position.set(Math.sin(angle) * r, Math.cos(angle) * r, 0.04);
-    tick.rotation.z = -angle;
-    clock.add(tick);
+    tickDummy.position.set(Math.sin(angle) * r, Math.cos(angle) * r, 0.04);
+    tickDummy.rotation.set(0, 0, -angle);
+    tickDummy.scale.set(isMajor ? 1.18 : 0.74, isMajor ? 1.24 : 0.76, 1);
+    tickDummy.updateMatrix();
+    ticksMesh.setMatrixAt(i, tickDummy.matrix);
   }
+  ticksMesh.instanceMatrix.needsUpdate = true;
+  clock.add(ticksMesh);
 
   // Hour hand (~9 o'clock) & minute hand (~10 minutes past)
   const hourHand = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.02, 0.01), handMat);
@@ -390,7 +391,6 @@ function buildSideStool(
 
   const top = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.24, 0.045, 16), woodMat);
   top.position.y = 0.46;
-  top.castShadow = true;
   top.receiveShadow = true;
   stool.add(top);
 
@@ -447,11 +447,13 @@ export function buildRoomAndTable(): THREE.Group {
   // Layered woven parlor rug under the poker table
   const rugGroup = new THREE.Group();
   rugGroup.name = 'PropRug';
+  const cabinetWoodMat = createMatteMaterial(SCENE_COLORS.propCabinetWood, { roughness: 0.8 });
+  const cabinetDarkMat = createMatteMaterial(SCENE_COLORS.propCabinetDark, { roughness: 0.84 });
 
   const rugOuterShape = createOvalShape(3.56, 2.74, 64);
   const rugOuter = new THREE.Mesh(
     new THREE.ShapeGeometry(rugOuterShape),
-    createMatteMaterial(SCENE_COLORS.propCabinetDark, { roughness: 0.96 }),
+    cabinetDarkMat,
   );
   rugOuter.rotation.x = -Math.PI / 2;
   rugOuter.position.y = floorY + 0.004;
@@ -496,19 +498,20 @@ export function buildRoomAndTable(): THREE.Group {
   backWall.receiveShadow = true;
   root.add(backWall);
 
-  const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(14, 8.5), wallSideMat);
+  const sideWallGeo = new THREE.PlaneGeometry(14, 8.5);
+  const leftWall = new THREE.Mesh(sideWallGeo, wallSideMat);
   leftWall.position.set(-5.6, floorY + 4.25, 1.0);
   leftWall.rotation.y = Math.PI / 2;
   leftWall.receiveShadow = true;
   root.add(leftWall);
 
-  const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(14, 8.5), wallSideMat);
+  const rightWall = new THREE.Mesh(sideWallGeo, wallSideMat);
   rightWall.position.set(5.6, floorY + 4.25, 1.0);
   rightWall.rotation.y = -Math.PI / 2;
   rightWall.receiveShadow = true;
   root.add(rightWall);
 
-  // Back & side wall wainscoting + chair rail molding
+  // Back & side wall wainscoting + chair rail molding (shared geometries for left & right sides)
   const wainscotBack = new THREE.Mesh(new THREE.BoxGeometry(16, 1.45, 0.08), wainscotMat);
   wainscotBack.position.set(0, floorY + 0.725, -4.36);
   wainscotBack.receiveShadow = true;
@@ -518,13 +521,15 @@ export function buildRoomAndTable(): THREE.Group {
   chairRailBack.position.set(0, floorY + 1.46, -4.34);
   root.add(chairRailBack);
 
+  const wainscotSideGeo = new THREE.BoxGeometry(0.08, 1.45, 12);
+  const chairRailSideGeo = new THREE.BoxGeometry(0.13, 0.09, 12);
   for (const sx of [-1, 1]) {
-    const wainscotSide = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.45, 12), wainscotMat);
+    const wainscotSide = new THREE.Mesh(wainscotSideGeo, wainscotMat);
     wainscotSide.position.set(sx * 5.55, floorY + 0.725, 0.5);
     wainscotSide.receiveShadow = true;
     root.add(wainscotSide);
 
-    const chairRailSide = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.09, 12), trimMat);
+    const chairRailSide = new THREE.Mesh(chairRailSideGeo, trimMat);
     chairRailSide.position.set(sx * 5.53, floorY + 1.46, 0.5);
     root.add(chairRailSide);
   }
@@ -551,8 +556,10 @@ export function buildRoomAndTable(): THREE.Group {
   windowGroup.add(mullionH);
   root.add(windowGroup);
 
-  // Tasteful vintage matte framed prints on the back wall
+  // Tasteful vintage matte framed prints on the back wall (shared frame and canvas geometries)
   const frameWoodMat = createMatteMaterial(SCENE_COLORS.tableRim, { roughness: 0.8 });
+  const artFrameGeo = new THREE.BoxGeometry(0.92, 1.14, 0.06);
+  const artCanvasGeo = new THREE.PlaneGeometry(0.78, 0.98);
   const artSpecs: readonly { x: number; suit: '♥' | '♠' | '♦'; color: string }[] = [
     { x: -2.4, suit: '♠', color: '#3E5768' },
     { x: 0, suit: '♥', color: '#C95849' },
@@ -562,13 +569,13 @@ export function buildRoomAndTable(): THREE.Group {
     const artGroup = new THREE.Group();
     artGroup.position.set(spec.x, 1.78, -4.32);
 
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.14, 0.06), frameWoodMat);
+    const frame = new THREE.Mesh(artFrameGeo, frameWoodMat);
     frame.castShadow = true;
     artGroup.add(frame);
 
     const artTex = createWallArtTexture(spec.suit, spec.color);
     const canvasMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.78, 0.98),
+      artCanvasGeo,
       createMatteMaterial(0xffffff, { map: artTex, roughness: 0.92 }),
     );
     canvasMesh.position.z = 0.034;
@@ -618,16 +625,18 @@ export function buildRoomAndTable(): THREE.Group {
   root.add(lampGroup);
 
   // Vietnamese home-game background props (placed strictly behind the chairs/table, out of all table sightlines)
-  const cabinetWoodMat = createMatteMaterial(SCENE_COLORS.propCabinetWood, { roughness: 0.8 });
-  const cabinetDarkMat = createMatteMaterial(SCENE_COLORS.propCabinetDark, { roughness: 0.84 });
-
-  const teaCabinet = buildSideCabinetWithTeaSet(cabinetWoodMat, cabinetDarkMat, brassMat);
+  const teaCabinet = buildSideCabinetWithTeaSet(
+    cabinetWoodMat,
+    cabinetDarkMat,
+    brassMat,
+    frameWoodMat,
+  );
   teaCabinet.position.set(-3.36, floorY, -3.72);
   teaCabinet.rotation.y = 0.22;
   root.add(teaCabinet);
 
-  const pottedPlant = buildPottedPlant(cabinetWoodMat);
-  pottedPlant.position.set(3.88, floorY, -3.12);
+  const pottedPlant = buildPottedPlant(cabinetWoodMat, cabinetDarkMat);
+  pottedPlant.position.set(4.52, floorY, -3.26);
   root.add(pottedPlant);
 
   const wallClock = buildWallClock(cabinetDarkMat, brassMat);
@@ -780,6 +789,11 @@ export function buildRoomAndTable(): THREE.Group {
   // --- 3. FOUR PARLOR CHAIRS ---
   const chairWoodMat = createMatteMaterial(SCENE_COLORS.chairWood, { roughness: 0.8 });
   const chairCushionMat = createMatteMaterial(SCENE_COLORS.chairCushion, { roughness: 0.9 });
+  const sharedChairGeos: SharedChairGeometries = {
+    seatGeo: new THREE.CylinderGeometry(0.32, 0.34, 0.08, 20),
+    apronGeo: new THREE.CylinderGeometry(0.35, 0.33, 0.05, 20),
+    legGeo: new THREE.CylinderGeometry(0.024, 0.018, 0.44, 10),
+  };
 
   const chairPlacements: readonly { x: number; z: number; rotY: number; lowBack?: boolean }[] = [
     // Cá (left-far)
@@ -793,7 +807,9 @@ export function buildRoomAndTable(): THREE.Group {
   ];
 
   for (const p of chairPlacements) {
-    const chair = buildChair(chairWoodMat, chairCushionMat, { lowBack: p.lowBack });
+    const chair = buildChair(chairWoodMat, chairCushionMat, sharedChairGeos, {
+      lowBack: p.lowBack,
+    });
     chair.position.set(p.x, 0, p.z);
     chair.rotation.y = p.rotY;
     root.add(chair);

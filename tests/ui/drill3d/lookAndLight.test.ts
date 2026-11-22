@@ -109,8 +109,12 @@ describe('L2 3D look and lighting polish', () => {
     const hero = characters.root.getObjectByName('HeroPresence');
     expect(hero).toBeDefined();
 
-    const heroBox = new THREE.Box3().setFromObject(hero!);
-    expect(heroBox.min.y).toBeGreaterThan(railBox.max.y);
+    const raycaster = new THREE.Raycaster();
+    const downDir = new THREE.Vector3(0, -1, 0);
+    const worldVertex = new THREE.Vector3();
+    const railMeshTyped = railMesh as import('three').Mesh;
+    const origSide = (railMeshTyped.material as import('three').Material).side;
+    (railMeshTyped.material as import('three').Material).side = THREE.DoubleSide;
 
     const meshNames: string[] = [];
     hero!.traverse((obj) => {
@@ -120,8 +124,35 @@ describe('L2 3D look and lighting polish', () => {
       }
       meshNames.push(mesh.name);
       const box = new THREE.Box3().setFromObject(mesh);
-      // Every sleeve, cuff, wrist, palm, finger and thumb mesh sits above railBox.max.y
-      expect(box.min.y).toBeGreaterThan(railBox.max.y);
+
+      if (mesh.name === 'HeroSleeve') {
+        // Sleeves extend outward past the outer rail edge and curve down outside the rail toward Hero's body
+        expect(box.max.z).toBeGreaterThan(TABLE_METRICS.railOuterRz + 0.28);
+      } else {
+        // Every cuff, wrist, palm, finger and thumb mesh sits strictly above railBox.max.y
+        expect(box.min.y).toBeGreaterThan(railBox.max.y);
+      }
+
+      // Every vertex of every Hero mesh must stay outside the TableRail volume (and strictly above railBox.max.y when over the rail)
+      const posAttr = mesh.geometry.attributes.position;
+      expect(posAttr).toBeDefined();
+      if (posAttr) {
+        for (let i = 0; i < posAttr.count; i += 1) {
+          worldVertex.fromBufferAttribute(posAttr, i).applyMatrix4(mesh.matrixWorld);
+          const railFootprintNorm = Math.hypot(
+            worldVertex.x / (TABLE_METRICS.railOuterRx + 0.04),
+            worldVertex.z / (TABLE_METRICS.railOuterRz + 0.04),
+          );
+          if (railFootprintNorm <= 1.0) {
+            expect(worldVertex.y).toBeGreaterThan(railBox.max.y);
+          }
+          if (railBox.containsPoint(worldVertex)) {
+            raycaster.set(worldVertex, downDir);
+            const hits = raycaster.intersectObject(railMeshTyped, false);
+            expect(hits.length % 2).toBe(0);
+          }
+        }
+      }
 
       // Verify horizontal position rests over the near rail ring and never covers hole cards, pot, call or board
       const center = box.getCenter(new THREE.Vector3());
@@ -130,7 +161,7 @@ describe('L2 3D look and lighting polish', () => {
 
       const normOuter = Math.hypot(
         center.x / (TABLE_METRICS.railOuterRx + 0.06),
-        center.z / (TABLE_METRICS.railOuterRz + 0.06),
+        center.z / (TABLE_METRICS.railOuterRz + 0.16),
       );
       const normInner = Math.hypot(
         center.x / (TABLE_METRICS.feltRx - 0.12),
@@ -139,6 +170,7 @@ describe('L2 3D look and lighting polish', () => {
       expect(normOuter).toBeLessThanOrEqual(1.0);
       expect(normInner).toBeGreaterThanOrEqual(0.95);
     });
+    (railMeshTyped.material as import('three').Material).side = origSide;
 
     // Both left and right arms have sleeve, cuff, wrist, palm, 4 fingers, and thumb (9 meshes * 2 = 18)
     expect(meshNames).toHaveLength(18);
@@ -147,17 +179,19 @@ describe('L2 3D look and lighting polish', () => {
     expect(meshNames.filter((n) => n === 'HeroPalm')).toHaveLength(2);
   });
 
-  it('gives Cá, Cáo and Nóng distinct hand colours resting on the rail that stay planted when leaning', async () => {
+  it('keeps zero vertices of any rival sleeve, cuff or hand mesh inside TableRail at rest and across every lean pose', async () => {
     const THREE = await import('three');
     const { buildRoomAndTable } = await import('../../../src/ui/drill3d/scene/buildRoomAndTable');
-    const { buildCharacters, PHASE_CHARACTER_POSES } = await import(
+    const { buildCharacters, getLiveCharacterPose, PHASE_CHARACTER_POSES } = await import(
       '../../../src/ui/drill3d/scene/buildCharacters'
     );
     const { SCENE_COLORS } = await import('../../../src/ui/drill3d/scene/palette');
 
     const room = buildRoomAndTable();
     room.updateMatrixWorld(true);
-    const railBox = new THREE.Box3().setFromObject(room.getObjectByName('TableRail')!);
+    const railMesh = room.getObjectByName('TableRail') as import('three').Mesh;
+    expect(railMesh).toBeDefined();
+    const railBox = new THREE.Box3().setFromObject(railMesh);
 
     const characters = buildCharacters();
     characters.applyPose(PHASE_CHARACTER_POSES.decision);
@@ -170,25 +204,99 @@ describe('L2 3D look and lighting polish', () => {
     expect(SCENE_COLORS.caoPaw).not.toBe(SCENE_COLORS.caoCream);
     expect(SCENE_COLORS.nongHand).not.toBe(SCENE_COLORS.nongSweater);
 
+    // Real geometry point-in-mesh volume check against TableRail + railBox.max.y check
+    const raycaster = new THREE.Raycaster();
+    const downDir = new THREE.Vector3(0, -1, 0);
+    const worldVertex = new THREE.Vector3();
+    const originalRailSide = (railMesh.material as import('three').Material).side;
+    (railMesh.material as import('three').Material).side = THREE.DoubleSide;
+
+    const countVerticesInsideRail = (rootObj: import('three').Object3D): {
+      totalVertices: number;
+      insideRailVertices: number;
+      minVertexY: number;
+    } => {
+      let totalVertices = 0;
+      let insideRailVertices = 0;
+      let minVertexY = Infinity;
+
+      rootObj.traverse((obj) => {
+        const mesh = obj as import('three').Mesh;
+        if (!mesh.isMesh || !mesh.geometry) {
+          return;
+        }
+        const posAttr = mesh.geometry.attributes.position;
+        if (!posAttr) {
+          return;
+        }
+        for (let i = 0; i < posAttr.count; i += 1) {
+          worldVertex.fromBufferAttribute(posAttr, i).applyMatrix4(mesh.matrixWorld);
+          totalVertices += 1;
+          if (worldVertex.y < minVertexY) {
+            minVertexY = worldVertex.y;
+          }
+          if (railBox.containsPoint(worldVertex)) {
+            raycaster.set(worldVertex, downDir);
+            const hits = raycaster.intersectObject(railMesh, false);
+            if (hits.length % 2 === 1) {
+              insideRailVertices += 1;
+            }
+          }
+        }
+      });
+
+      return { totalVertices, insideRailVertices, minVertexY };
+    };
+
+    const allPoses = [
+      PHASE_CHARACTER_POSES.arrival,
+      PHASE_CHARACTER_POSES.decision,
+      PHASE_CHARACTER_POSES.review,
+      getLiveCharacterPose(null, false, null),
+      getLiveCharacterPose(null, true, 'flop'),
+      ...(['ca', 'cao', 'nong'] as const).flatMap((rival) =>
+        ([null, 'preflop', 'flop', 'turn', 'river'] as const).map((street) =>
+          getLiveCharacterPose(rival, false, street),
+        ),
+      ),
+      {
+        ...PHASE_CHARACTER_POSES.decision,
+        caLean: 0.11,
+        caoLean: 0.11,
+        nongLean: 0.11,
+      },
+    ];
+
     for (const rivalName of ['CharacterCa', 'CharacterCao', 'CharacterNong']) {
       characters.applyPose(PHASE_CHARACTER_POSES.decision);
       characters.root.updateMatrixWorld(true);
 
-      const rival = characters.root.getObjectByName(rivalName);
+      const rival = characters.root.getObjectByName(rivalName)!;
       expect(rival).toBeDefined();
 
-      const handL = rival!.getObjectByName('RivalHandLeft')!;
-      const handR = rival!.getObjectByName('RivalHandRight')!;
+      const sleeveL = rival.getObjectByName('RivalSleeveLeft')!;
+      const sleeveR = rival.getObjectByName('RivalSleeveRight')!;
+      const handL = rival.getObjectByName('RivalHandLeft')!;
+      const handR = rival.getObjectByName('RivalHandRight')!;
+      expect(sleeveL).toBeDefined();
+      expect(sleeveR).toBeDefined();
       expect(handL).toBeDefined();
       expect(handR).toBeDefined();
 
-      const boxL = new THREE.Box3().setFromObject(handL);
-      const boxR = new THREE.Box3().setFromObject(handR);
-      expect(boxL.min.y).toBeGreaterThan(railBox.max.y);
-      expect(boxR.min.y).toBeGreaterThan(railBox.max.y);
-
       const beforeL = handL.getWorldPosition(new THREE.Vector3());
       const beforeR = handR.getWorldPosition(new THREE.Vector3());
+
+      for (const pose of allPoses) {
+        characters.applyPose(pose);
+        characters.root.updateMatrixWorld(true);
+
+        for (const part of [sleeveL, sleeveR, handL, handR]) {
+          const stats = countVerticesInsideRail(part);
+          expect(stats.totalVertices).toBeGreaterThan(0);
+          expect(stats.insideRailVertices).toBe(0);
+          expect(stats.minVertexY).toBeGreaterThan(railBox.max.y);
+        }
+      }
 
       characters.applyPose({
         ...PHASE_CHARACTER_POSES.decision,
@@ -198,17 +306,14 @@ describe('L2 3D look and lighting polish', () => {
       });
       characters.root.updateMatrixWorld(true);
 
-      const leanedBoxL = new THREE.Box3().setFromObject(handL);
-      const leanedBoxR = new THREE.Box3().setFromObject(handR);
-      expect(leanedBoxL.min.y).toBeGreaterThan(railBox.max.y);
-      expect(leanedBoxR.min.y).toBeGreaterThan(railBox.max.y);
-
       const afterL = handL.getWorldPosition(new THREE.Vector3());
       const afterR = handR.getWorldPosition(new THREE.Vector3());
 
       expect(beforeL.distanceTo(afterL)).toBeLessThan(0.015);
       expect(beforeR.distanceTo(afterR)).toBeLessThan(0.015);
     }
+
+    (railMesh.material as import('three').Material).side = originalRailSide;
   });
 
   it('adds Vietnamese home-game room props completely clear of table sightlines from all cameras', async () => {
@@ -269,11 +374,67 @@ describe('L2 3D look and lighting polish', () => {
         expect(hits).toHaveLength(0);
       }
     }
+
+    // Potted plant leaves must not sit behind Nóng's spout and steam in the decision camera
+    const pottedPlant = room.getObjectByName('PropPottedPlant')!;
+    const nong = characters.root.getObjectByName('CharacterNong')!;
+    const decisionCamPos = new THREE.Vector3(...CAMERA_PRESETS.decision.position);
+    nong.traverse((obj) => {
+      const mesh = obj as import('three').Mesh;
+      if (!mesh.isMesh) {
+        return;
+      }
+      const center = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+      const dir = center.clone().sub(decisionCamPos).normalize();
+      raycaster.set(decisionCamPos, dir);
+      raycaster.near = 0.1;
+      raycaster.far = 15;
+      const plantHits = raycaster.intersectObject(pottedPlant, true);
+      expect(plantHits).toHaveLength(0);
+    });
+
+    // Mobile performance: clock ticks batched in one InstancedMesh, shared hand geometries, FrontSide leaves, reduced shadow casters
+    const wallClock = room.getObjectByName('PropWallClock')!;
+    let clockInstancedCount = 0;
+    wallClock.traverse((obj) => {
+      if ((obj as import('three').InstancedMesh).isInstancedMesh) {
+        clockInstancedCount += 1;
+        expect((obj as import('three').InstancedMesh).count).toBe(12);
+      }
+    });
+    expect(clockInstancedCount).toBe(1);
+
+    for (const propName of ['PropTeaCabinet', 'PropPottedPlant', 'PropWallClock', 'PropSideStool']) {
+      room.getObjectByName(propName)!.traverse((obj) => {
+        const mesh = obj as import('three').Mesh;
+        if (mesh.isMesh) {
+          expect(mesh.castShadow).toBe(false);
+          const mat = mesh.material as import('three').Material;
+          expect(mat.side).toBe(THREE.FrontSide);
+        }
+      });
+    }
+
+    const handGeometries = new Set<import('three').BufferGeometry>();
+    for (const rivalName of ['CharacterCa', 'CharacterCao', 'CharacterNong']) {
+      const rival = characters.root.getObjectByName(rivalName)!;
+      for (const handName of ['RivalHandLeft', 'RivalHandRight']) {
+        rival.getObjectByName(handName)!.traverse((obj) => {
+          const mesh = obj as import('three').Mesh;
+          if (mesh.isMesh) {
+            handGeometries.add(mesh.geometry);
+          }
+        });
+      }
+    }
+    // All 6 rival hands share one set of 4 geometries (cuff, palm, finger, thumb)
+    expect(handGeometries.size).toBe(4);
   });
 
-  it('configures at most one shadow-casting light with a 1024 shadow map', async () => {
+  it('configures at most one shadow-casting light with a 1024 shadow map and disposes lights in disposeObject3DResources', async () => {
     const THREE = await import('three');
     const { DrillSceneController } = await import('../../../src/ui/drill3d/scene/sceneController');
+    const { disposeObject3DResources } = await import('../../../src/ui/drill3d/scene/palette');
 
     const fakeScene = new THREE.Scene();
     type LightSetupReceiver = {
@@ -298,6 +459,11 @@ describe('L2 3D look and lighting polish', () => {
     expect(keyCaster).toBeInstanceOf(THREE.SpotLight);
     expect(keyCaster.shadow.mapSize.x).toBeLessThanOrEqual(1024);
     expect(keyCaster.shadow.mapSize.y).toBeLessThanOrEqual(1024);
+    expect(fakeScene.children).toContain(keyCaster.target);
+
+    const disposeSpy = vi.spyOn(keyCaster, 'dispose');
+    disposeObject3DResources(fakeScene);
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
   });
 
   it('draws larger, bolder card rank and suit indices while keeping the separate-lobe ♣ glyph intact', async () => {
