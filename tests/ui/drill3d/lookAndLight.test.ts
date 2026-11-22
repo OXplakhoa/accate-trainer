@@ -337,6 +337,16 @@ describe('L2 3D look and lighting polish', () => {
       expect(room.getObjectByName(propName)).toBeDefined();
     }
 
+    // Rug inner field uses a warm mid-tone so it never out-reads the spotlighted table felt under front fill
+    const { SCENE_COLORS } = await import('../../../src/ui/drill3d/scene/palette');
+    const rugFieldColor = new THREE.Color(SCENE_COLORS.propRugField);
+    const rugBandColor = new THREE.Color(SCENE_COLORS.propRugBand);
+    const wallShadeColor = new THREE.Color(SCENE_COLORS.roomWallShade);
+    const linearLuma = (c: import('three').Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    expect(linearLuma(rugFieldColor)).toBeLessThan(0.34);
+    expect(linearLuma(rugFieldColor)).toBeLessThan(linearLuma(wallShadeColor));
+    expect(linearLuma(rugBandColor)).toBeLessThan(linearLuma(rugFieldColor));
+
     // Above-floor props must remain behind or outside the table & rival chairs so they never enter table sightlines
     for (const propName of ['PropTeaCabinet', 'PropPottedPlant', 'PropWallClock', 'PropSideStool']) {
       const prop = room.getObjectByName(propName)!;

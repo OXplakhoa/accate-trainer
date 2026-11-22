@@ -57,9 +57,9 @@ export const SCENE_COLORS = {
   propPlanter: 0xc46f50,
   propLeaf: 0x48805e,
   propLeafLight: 0x629c76,
-  propRugField: 0xdcc6a4,
-  propRugBand: 0x9c5240,
-  propRugGold: 0xc6944e,
+  propRugField: 0xae9573,
+  propRugBand: 0x8f4c3b,
+  propRugGold: 0xb88746,
 
   ink: 0x261f1c,
   ivory: 0xfaf5eb,
