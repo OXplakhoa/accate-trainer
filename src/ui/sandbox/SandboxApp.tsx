@@ -730,6 +730,7 @@ export function SandboxApp({
                 data-deal-state={dealAnimState}
               >
                 {renderTableView && tableView}
+                {(!renderTableView || potValue > 0 || potSlices.length > 1) && (
                 <div className="sb-pot-display">
                   {!renderTableView && (
                   <div className="sb-pot-display__main">
@@ -759,6 +760,7 @@ export function SandboxApp({
                     </div>
                   )}
                 </div>
+                )}
 
                 {!renderTableView && <div className="sb-board" aria-label="5 lá bài chung">
                   {[0, 1, 2, 3, 4].map((slotIdx) => {

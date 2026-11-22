@@ -4,9 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveSandbox3d } from '../../../src/ui/liveSandbox3d/LiveSandbox3d';
 import { toLiveSceneSnapshot } from '../../../src/ui/liveSandbox3d/snapshot';
 import { SandboxApp } from '../../../src/ui/sandbox/SandboxApp';
-import { createSandboxSession } from '../../../src/ui/sandbox/controller';
+import {
+  createSandboxSession,
+  enterHandBoundary,
+  performHeroAction,
+  stepOneBotTurn,
+} from '../../../src/ui/sandbox/controller';
 import { formatCardShort } from '../../../src/ui/sandbox/format';
-import type { SandboxTableView } from '../../../src/ui/sandbox/types';
+import { HERO_PLAYER_ID, type SandboxTableView } from '../../../src/ui/sandbox/types';
+
+vi.mock('../../../src/ui/sandbox/controller', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/ui/sandbox/controller')>();
+  return {
+    ...actual,
+    createSandboxSession: vi.fn(actual.createSandboxSession),
+  };
+});
 
 describe('live Sandbox table integration', () => {
   beforeEach(() => { vi.spyOn(globalThis.performance, 'now').mockReturnValue(0); });
@@ -68,5 +81,47 @@ describe('live Sandbox table integration', () => {
     expect(live).not.toContain('Cài đặt</button>');
     expect(live).toContain('Sổ phiên');
     expect(live).toContain('Âm thanh: Bật');
+  });
+
+  it('omits empty sb-pot-display when renderTableView is active and pot is 0 while keeping original Sandbox unchanged', () => {
+    let s = createSandboxSession({
+      seed: 'pot-zero-boundary-test',
+      settings: { playerCount: 4, enabledRivalIds: ['ca', 'cao', 'nong'] },
+    });
+    let guard = 0;
+    while (s.phase === 'in-hand' && s.hand?.phase === 'betting' && guard < 100) {
+      if (s.hand.activePlayerId === HERO_PLAYER_ID) {
+        s = performHeroAction(s, 'fold');
+      } else {
+        s = stepOneBotTurn(s);
+      }
+      guard++;
+    }
+    const boundarySession = enterHandBoundary(s);
+    expect(boundarySession.phase).toBe('between-hands');
+    expect(boundarySession.boundary).not.toBeNull();
+
+    const mockedCreate = vi.mocked(createSandboxSession);
+    mockedCreate.mockReturnValueOnce(boundarySession);
+    const livePotZeroHtml = renderToStaticMarkup(
+      createElement(SandboxApp, {
+        initialSeed: 'pot-zero-boundary-test',
+        storage: null,
+        renderTableView: (snapshot) =>
+          createElement('div', { 'data-test-table': 'live', 'data-pot': String(snapshot.pot) }),
+      }),
+    );
+    expect(livePotZeroHtml).toContain('data-pot="0"');
+    expect(livePotZeroHtml).not.toContain('class="sb-pot-display"');
+
+    mockedCreate.mockReturnValueOnce(boundarySession);
+    const originalPotZeroHtml = renderToStaticMarkup(
+      createElement(SandboxApp, {
+        initialSeed: 'pot-zero-boundary-test',
+        storage: null,
+      }),
+    );
+    expect(originalPotZeroHtml).toContain('class="sb-pot-display"');
+    expect(originalPotZeroHtml).toContain('class="sb-pot-display__main"');
   });
 });
