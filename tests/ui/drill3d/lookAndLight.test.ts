@@ -342,10 +342,13 @@ describe('L2 3D look and lighting polish', () => {
     const rugFieldColor = new THREE.Color(SCENE_COLORS.propRugField);
     const rugBandColor = new THREE.Color(SCENE_COLORS.propRugBand);
     const wallShadeColor = new THREE.Color(SCENE_COLORS.roomWallShade);
+    const celadonColor = new THREE.Color(SCENE_COLORS.propCeladon);
     const linearLuma = (c: import('three').Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
     expect(linearLuma(rugFieldColor)).toBeLessThan(0.34);
     expect(linearLuma(rugFieldColor)).toBeLessThan(linearLuma(wallShadeColor));
     expect(linearLuma(rugBandColor)).toBeLessThan(linearLuma(rugFieldColor));
+    // Celadon teapot/cups stay muted enough in diffuse reflectance to remain darker than the spotlighted felt
+    expect(linearLuma(celadonColor)).toBeLessThan(0.53);
 
     // Rug world-space outer extent sits inside the camera framing (< 3.56 / 2.74 half-extents) while extending beyond the table's outer rail footprint
     const rug = room.getObjectByName('PropRug')!;

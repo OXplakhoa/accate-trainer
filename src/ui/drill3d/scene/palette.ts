@@ -53,7 +53,7 @@ export const SCENE_COLORS = {
   // Home-game room props
   propCabinetWood: 0xb07d58,
   propCabinetDark: 0x8a5e42,
-  propCeladon: 0xa6d2be,
+  propCeladon: 0x9ac4b0,
   propPlanter: 0xc46f50,
   propLeaf: 0x48805e,
   propLeafLight: 0x629c76,
