@@ -1,4 +1,4 @@
-import { DENOMINATIONS } from '../../../engine';
+import { DENOMINATIONS, type ChipCounts } from '../../../engine';
 import type {
   LessonHighlight,
   LiveSceneDetails,
@@ -252,6 +252,31 @@ export function getCharacterPoseKey(state: SceneMotionState): string {
   return 'live:idle';
 }
 
+function serializeChips(chips: ChipCounts): string {
+  return DENOMINATIONS.map((d) => chips[d]).join(',');
+}
+
+function serializeSeats(seats: LiveSceneDetails['seats']): string {
+  return seats
+    .map((seat) =>
+      [
+        seat.id,
+        serializeChips(seat.stackChips),
+        serializeChips(seat.streetChips),
+        seat.status,
+        seat.lastAction ? `${seat.lastAction.type}:${seat.lastAction.amount}` : '-',
+        seat.isActor ? 'A' : '0',
+        seat.isWinner ? 'W' : '0',
+        seat.revealedCards ? seat.revealedCards.join('.') : '-',
+      ].join('~'),
+    )
+    .join(';');
+}
+
+function serializePayoutTransfers(transfers: LiveSceneDetails['payoutTransfers']): string {
+  return transfers.map((t) => `${t.seatId}:${serializeChips(t.chips)}`).join(';');
+}
+
 /**
  * Deterministic visual key used for on-demand rendering.
  * When unchanged and no transition is running, the renderer does not need a frame.
@@ -275,11 +300,15 @@ export function getSceneVisualKey(state: SceneMotionState): string {
   return [
     'live',
     ...base,
-    DENOMINATIONS.map(d => live.potChips[d]).join(','),
+    serializeChips(live.potChips),
+    String(live.handNumber),
+    String(live.timelineLength),
     live.street ?? 'idle',
     live.occupiedRivals.join(','),
     live.activeRival ?? 'none',
     live.activePlayerName ?? 'none',
+    serializeSeats(live.seats),
+    serializePayoutTransfers(live.payoutTransfers),
     state.reducedMotion ? 'rm' : 'motion',
   ].join('|');
 }
