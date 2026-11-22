@@ -21,65 +21,33 @@ export interface CharactersRig {
   readonly setOccupiedRivals: (occupiedRivals: readonly SceneRival[]) => void;
 }
 
-function addSculptedHand(
-  parent: THREE.Group,
-  handMat: THREE.MeshStandardMaterial,
-  x: number,
-  y: number,
-  z: number,
-  rotY: number,
-  mirrorX = 1,
-): void {
-  const hand = new THREE.Group();
-  hand.position.set(x, y, z);
-  hand.rotation.y = rotY;
-
-  // Rounded palm
-  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.062, 14, 12), handMat);
-  palm.scale.set(1.05, 0.56, 1.15);
-  palm.castShadow = true;
-  hand.add(palm);
-
-  // 3 sculpted finger forms curved gently downward
-  const fingerGeo = new THREE.CapsuleGeometry(0.017, 0.045, 6, 8);
-  for (let i = -1; i <= 1; i += 1) {
-    const finger = new THREE.Mesh(fingerGeo, handMat);
-    finger.position.set(i * 0.032, -0.008, 0.066);
-    finger.rotation.x = Math.PI * 0.44;
-    finger.castShadow = true;
-    hand.add(finger);
-  }
-
-  // Thumb
-  const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.017, 0.034, 6, 8), handMat);
-  thumb.position.set(-0.055 * mirrorX, -0.006, 0.02);
-  thumb.rotation.z = 0.7 * mirrorX;
-  thumb.rotation.x = 0.55;
-  hand.add(thumb);
-
-  parent.add(hand);
+interface SharedRivalResources {
+  readonly cuffGeo: THREE.CylinderGeometry;
+  readonly palmGeo: THREE.SphereGeometry;
+  readonly fingerGeo: THREE.CapsuleGeometry;
+  readonly thumbGeo: THREE.CapsuleGeometry;
+  readonly torsoGeo: THREE.LatheGeometry;
+  readonly collarGeo: THREE.CylinderGeometry;
+  readonly shirtBibGeo: THREE.BoxGeometry;
+  readonly shoulderGeo: THREE.SphereGeometry;
+  readonly buttonGeo: THREE.SphereGeometry;
+  readonly buttonMat: THREE.MeshStandardMaterial;
+  readonly scleraMat: THREE.MeshStandardMaterial;
+  readonly inkMat: THREE.MeshStandardMaterial;
 }
 
-interface HumanoidTorsoOptions {
-  readonly vestColor: number;
-  readonly shirtColor: number;
-  readonly handColor: number;
-  readonly tieColor?: number;
-  readonly leanForward?: number;
-  readonly rightArmReach?: number;
-}
+function createSharedRivalResources(): SharedRivalResources {
+  const cuffGeo = new THREE.CylinderGeometry(0.045, 0.052, 0.048, 16);
+  cuffGeo.rotateX(Math.PI / 2);
 
-function buildSeatedTorso(opts: HumanoidTorsoOptions): THREE.Group {
-  const body = new THREE.Group();
+  const palmGeo = new THREE.SphereGeometry(0.072, 16, 14);
 
-  const vestMat = createMatteMaterial(opts.vestColor, { roughness: 0.88 });
-  const shirtMat = createMatteMaterial(opts.shirtColor, { roughness: 0.86 });
-  const handMat = createMatteMaterial(opts.handColor, { roughness: 0.84 });
-  const buttonMat = createMatteMaterial(SCENE_COLORS.tableRim, { roughness: 0.76 });
+  const fingerGeo = new THREE.CapsuleGeometry(0.02, 0.048, 6, 8);
+  fingerGeo.rotateX(Math.PI / 2 + 0.12);
 
-  const lean = opts.leanForward ?? 0;
+  const thumbGeo = new THREE.CapsuleGeometry(0.02, 0.04, 6, 8);
+  thumbGeo.rotateX(Math.PI / 2 + 0.1);
 
-  // Turned sculpted torso (organic rounded shoulders & waist)
   const torsoProfile = [
     new THREE.Vector2(0.0, 0.0),
     new THREE.Vector2(0.24, 0.02),
@@ -90,7 +58,170 @@ function buildSeatedTorso(opts: HumanoidTorsoOptions): THREE.Group {
     new THREE.Vector2(0.0, 0.59),
   ];
   const torsoGeo = new THREE.LatheGeometry(torsoProfile, 24);
-  const torso = new THREE.Mesh(torsoGeo, vestMat);
+  const collarGeo = new THREE.CylinderGeometry(0.135, 0.165, 0.11, 18);
+  const shirtBibGeo = new THREE.BoxGeometry(0.13, 0.24, 0.06);
+  const shoulderGeo = new THREE.SphereGeometry(0.092, 14, 12);
+  const buttonGeo = new THREE.SphereGeometry(0.016, 10, 8);
+
+  const buttonMat = createMatteMaterial(SCENE_COLORS.tableRim, { roughness: 0.76 });
+  const scleraMat = createMatteMaterial(SCENE_COLORS.ivory, { roughness: 0.65 });
+  const inkMat = createMatteMaterial(SCENE_COLORS.ink, { roughness: 0.55 });
+
+  return {
+    cuffGeo,
+    palmGeo,
+    fingerGeo,
+    thumbGeo,
+    torsoGeo,
+    collarGeo,
+    shirtBibGeo,
+    shoulderGeo,
+    buttonGeo,
+    buttonMat,
+    scleraMat,
+    inkMat,
+  };
+}
+
+function createTaperedSleeveGeometry(
+  curve: THREE.Curve<THREE.Vector3>,
+  tubularSegments: number,
+  radialSegments: number,
+  startRx: number,
+  startRy: number,
+  endRx: number,
+  endRy: number,
+): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3();
+  const normalUp = new THREE.Vector3();
+
+  for (let i = 0; i <= tubularSegments; i += 1) {
+    const u = i / tubularSegments;
+    const smooth = u * u * (3 - 2 * u);
+    const rx = startRx + (endRx - startRx) * smooth;
+    const ry = startRy + (endRy - startRy) * smooth;
+
+    const pos = curve.getPointAt(u);
+    const tangent = curve.getTangentAt(u).normalize();
+    right.crossVectors(tangent, worldUp).normalize();
+    normalUp.crossVectors(right, tangent).normalize();
+
+    for (let j = 0; j <= radialSegments; j += 1) {
+      const v = (j / radialSegments) * Math.PI * 2;
+      const cos = Math.cos(v);
+      const sin = Math.sin(v);
+
+      const vx = pos.x + right.x * (cos * rx) + normalUp.x * (sin * ry);
+      const vy = pos.y + right.y * (cos * rx) + normalUp.y * (sin * ry);
+      const vz = pos.z + right.z * (cos * rx) + normalUp.z * (sin * ry);
+      positions.push(vx, vy, vz);
+
+      const nx = right.x * (cos / rx) + normalUp.x * (sin / ry);
+      const ny = right.y * (cos / rx) + normalUp.y * (sin / ry);
+      const nz = right.z * (cos / rx) + normalUp.z * (sin / ry);
+      const nLen = Math.hypot(nx, ny, nz) || 1;
+      normals.push(nx / nLen, ny / nLen, nz / nLen);
+    }
+  }
+
+  const stride = radialSegments + 1;
+  for (let i = 0; i < tubularSegments; i += 1) {
+    for (let j = 0; j < radialSegments; j += 1) {
+      const a = i * stride + j;
+      const b = (i + 1) * stride + j;
+      const c = (i + 1) * stride + (j + 1);
+      const d = i * stride + (j + 1);
+      indices.push(a, b, d);
+      indices.push(b, c, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setIndex(indices);
+  return geo;
+}
+
+function addSculptedHand(
+  parent: THREE.Group,
+  shared: SharedRivalResources,
+  handMat: THREE.MeshStandardMaterial,
+  cuffMat: THREE.MeshStandardMaterial,
+  x: number,
+  y: number,
+  z: number,
+  rotY: number,
+  mirrorX = 1,
+): void {
+  const hand = new THREE.Group();
+  hand.name = mirrorX > 0 ? 'RivalHandLeft' : 'RivalHandRight';
+  hand.position.set(x, y, z);
+  hand.rotation.y = rotY;
+
+  // Tailored wrist cuff connecting the tapered sleeve seamlessly into the hand
+  const cuff = new THREE.Mesh(shared.cuffGeo, cuffMat);
+  cuff.name = mirrorX > 0 ? 'RivalCuffLeft' : 'RivalCuffRight';
+  cuff.scale.set(1.08, 0.66, 1.0);
+  cuff.position.set(0, 0.004, -0.054);
+  cuff.castShadow = true;
+  hand.add(cuff);
+
+  // Proportionate plump stylized mitten/paw palm resting atop the rail (y_rail_top = 0.117)
+  const palm = new THREE.Mesh(shared.palmGeo, handMat);
+  palm.scale.set(1.12, 0.48, 1.16);
+  palm.castShadow = true;
+  palm.receiveShadow = true;
+  hand.add(palm);
+
+  // 3 plump sculpted finger digits resting horizontally forward on top of the rail (castShadow = false)
+  for (let i = -1; i <= 1; i += 1) {
+    const finger = new THREE.Mesh(shared.fingerGeo, handMat);
+    finger.position.set(i * 0.041, -0.004, 0.076 - Math.abs(i) * 0.004);
+    finger.rotation.y = i * 0.08;
+    finger.castShadow = false;
+    hand.add(finger);
+  }
+
+  // Distinct stylized thumb resting inward on the rail (castShadow = false)
+  const thumb = new THREE.Mesh(shared.thumbGeo, handMat);
+  thumb.position.set(-0.066 * mirrorX, -0.003, 0.024);
+  thumb.rotation.y = -0.46 * mirrorX;
+  thumb.castShadow = false;
+  hand.add(thumb);
+
+  parent.add(hand);
+}
+
+interface HumanoidTorsoOptions {
+  readonly vestColor: number;
+  readonly shirtColor: number;
+  readonly sleeveColor?: number;
+  readonly cuffColor?: number;
+  readonly handColor: number;
+  readonly tieColor?: number;
+  readonly leanForward?: number;
+  readonly rightArmReach?: number;
+}
+
+function buildSeatedTorso(opts: HumanoidTorsoOptions, shared: SharedRivalResources): THREE.Group {
+  const body = new THREE.Group();
+
+  const vestMat = createMatteMaterial(opts.vestColor, { roughness: 0.88 });
+  const shirtMat = createMatteMaterial(opts.shirtColor, { roughness: 0.86 });
+  const sleeveMat = createMatteMaterial(opts.sleeveColor ?? opts.shirtColor, { roughness: 0.87 });
+  const cuffMat = createMatteMaterial(opts.cuffColor ?? opts.shirtColor, { roughness: 0.85 });
+  const handMat = createMatteMaterial(opts.handColor, { roughness: 0.82 });
+
+  const lean = opts.leanForward ?? 0;
+
+  // Turned sculpted torso (organic rounded shoulders & waist)
+  const torso = new THREE.Mesh(shared.torsoGeo, vestMat);
   torso.position.set(0, -0.24, 0);
   torso.scale.set(1.06, 1.0, 0.76);
   torso.rotation.x = lean;
@@ -99,13 +230,12 @@ function buildSeatedTorso(opts: HumanoidTorsoOptions): THREE.Group {
   body.add(torso);
 
   // Crisp shirt collar V-front
-  const collarGeo = new THREE.CylinderGeometry(0.135, 0.165, 0.11, 18);
-  const collar = new THREE.Mesh(collarGeo, shirtMat);
+  const collar = new THREE.Mesh(shared.collarGeo, shirtMat);
   collar.position.set(0, 0.32, 0.025 + lean * 0.15);
   collar.rotation.x = lean;
   body.add(collar);
 
-  const shirtBib = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.24, 0.06), shirtMat);
+  const shirtBib = new THREE.Mesh(shared.shirtBibGeo, shirtMat);
   shirtBib.position.set(0, 0.2, 0.18 + lean * 0.12);
   shirtBib.rotation.x = lean - 0.08;
   body.add(shirtBib);
@@ -124,45 +254,79 @@ function buildSeatedTorso(opts: HumanoidTorsoOptions): THREE.Group {
     body.add(tieBlade);
   } else {
     for (let i = 0; i < 3; i += 1) {
-      const btn = new THREE.Mesh(new THREE.SphereGeometry(0.016, 10, 8), buttonMat);
+      const btn = new THREE.Mesh(shared.buttonGeo, shared.buttonMat);
       btn.position.set(0, 0.19 - i * 0.085, 0.215 + lean * 0.12);
       body.add(btn);
     }
   }
 
-  // Shoulders + curved arms resting forward onto/over the poker table rail
+  // Shoulders + tapered sleeves resting strictly above the table rail (y_rail_top = 0.117)
+  // and tapering seamlessly into the wrist cuffs with zero visible step
+  const handY = 0.168;
+  const handXL = -0.21;
+  const handZL = 0.39;
+  const rotYL = 0.24;
   const armCurveL = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(-0.27, 0.23, 0.02),
-    new THREE.Vector3(-0.34, 0.1, 0.15),
-    new THREE.Vector3(-0.25, 0.095, 0.34),
+    new THREE.Vector3(-0.27, 0.242, 0.02),
+    new THREE.Vector3(-0.305, 0.204, 0.14),
+    new THREE.Vector3(
+      handXL - Math.sin(rotYL) * 0.14,
+      0.18,
+      handZL - Math.cos(rotYL) * 0.14,
+    ),
+    new THREE.Vector3(
+      handXL - Math.sin(rotYL) * 0.066,
+      handY + 0.004,
+      handZL - Math.cos(rotYL) * 0.066,
+    ),
   ]);
-  const armMeshL = new THREE.Mesh(new THREE.TubeGeometry(armCurveL, 18, 0.068, 12, false), shirtMat);
+  const armMeshL = new THREE.Mesh(
+    createTaperedSleeveGeometry(armCurveL, 18, 14, 0.062, 0.056, 0.0555, 0.0338),
+    sleeveMat,
+  );
+  armMeshL.name = 'RivalSleeveLeft';
   armMeshL.castShadow = true;
   body.add(armMeshL);
 
-  const shoulderL = new THREE.Mesh(new THREE.SphereGeometry(0.092, 14, 12), vestMat);
-  shoulderL.position.set(-0.27, 0.23, 0.01);
+  const shoulderL = new THREE.Mesh(shared.shoulderGeo, vestMat);
+  shoulderL.position.set(-0.27, 0.24, 0.01);
   shoulderL.castShadow = true;
   body.add(shoulderL);
 
   const reachR = opts.rightArmReach ?? 0;
+  const handXR = 0.195 - reachR * 0.12;
+  const handZR = 0.39 + reachR;
+  const rotYR = -0.24;
   const armCurveR = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0.27, 0.23, 0.02),
-    new THREE.Vector3(0.34, 0.1, 0.15 + reachR * 0.35),
-    new THREE.Vector3(0.23 - reachR * 0.1, 0.092, 0.34 + reachR),
+    new THREE.Vector3(0.27, 0.242, 0.02),
+    new THREE.Vector3(0.305, 0.204, 0.14 + reachR * 0.35),
+    new THREE.Vector3(
+      handXR - Math.sin(rotYR) * 0.14,
+      0.18,
+      handZR - Math.cos(rotYR) * 0.14,
+    ),
+    new THREE.Vector3(
+      handXR - Math.sin(rotYR) * 0.066,
+      handY + 0.004,
+      handZR - Math.cos(rotYR) * 0.066,
+    ),
   ]);
-  const armMeshR = new THREE.Mesh(new THREE.TubeGeometry(armCurveR, 18, 0.068, 12, false), shirtMat);
+  const armMeshR = new THREE.Mesh(
+    createTaperedSleeveGeometry(armCurveR, 18, 14, 0.062, 0.056, 0.0555, 0.0338),
+    sleeveMat,
+  );
+  armMeshR.name = 'RivalSleeveRight';
   armMeshR.castShadow = true;
   body.add(armMeshR);
 
-  const shoulderR = new THREE.Mesh(new THREE.SphereGeometry(0.092, 14, 12), vestMat);
-  shoulderR.position.set(0.27, 0.23, 0.01);
+  const shoulderR = new THREE.Mesh(shared.shoulderGeo, vestMat);
+  shoulderR.position.set(0.27, 0.24, 0.01);
   shoulderR.castShadow = true;
   body.add(shoulderR);
 
-  // Hands resting naturally on the table edge
-  addSculptedHand(body, handMat, -0.22, 0.09, 0.39, 0.25, 1);
-  addSculptedHand(body, handMat, 0.2 - reachR * 0.12, 0.088, 0.39 + reachR, -0.25, -1);
+  // Hands resting naturally on top of the table rail (y = 0.168 keeps sleeve, cuff, palm & fingers > 0.117 even when leaning)
+  addSculptedHand(body, shared, handMat, cuffMat, handXL, handY, handZL, rotYL, 1);
+  addSculptedHand(body, shared, handMat, cuffMat, handXR, handY, handZR, rotYR, -1);
 
   return body;
 }
@@ -171,13 +335,13 @@ function createLeanWrapper(group: THREE.Group): {
   readonly leanPivot: THREE.Group;
   readonly bodyContainer: THREE.Group;
 } {
-  // Pivot near the wrists resting on the table rail so leaning forward keeps hands planted
+  // Pivot at the palm/rail contact zone (y = 0.166, z = 0.44) so leaning keeps hands planted on top of the rail
   const leanPivot = new THREE.Group();
-  leanPivot.position.set(0, 0.09, 0.36);
+  leanPivot.position.set(0, 0.166, 0.44);
   group.add(leanPivot);
 
   const bodyContainer = new THREE.Group();
-  bodyContainer.position.set(0, -0.09, -0.36);
+  bodyContainer.position.set(0, -0.166, -0.44);
   leanPivot.add(bodyContainer);
 
   return { leanPivot, bodyContainer };
@@ -191,17 +355,22 @@ interface CaRig {
   readonly lidR: THREE.Mesh;
 }
 
-function buildCaCharacter(): CaRig {
+function buildCaCharacter(shared: SharedRivalResources): CaRig {
   const group = new THREE.Group();
   group.name = 'CharacterCa';
 
   const { leanPivot, bodyContainer } = createLeanWrapper(group);
 
-  const body = buildSeatedTorso({
-    vestColor: SCENE_COLORS.caVest,
-    shirtColor: SCENE_COLORS.caShirt,
-    handColor: SCENE_COLORS.caBlue,
-  });
+  const body = buildSeatedTorso(
+    {
+      vestColor: SCENE_COLORS.caVest,
+      shirtColor: SCENE_COLORS.caShirt,
+      sleeveColor: SCENE_COLORS.caShirt,
+      cuffColor: SCENE_COLORS.caBlueDeep,
+      handColor: SCENE_COLORS.caHand,
+    },
+    shared,
+  );
   bodyContainer.add(body);
 
   const headPivot = new THREE.Group();
@@ -212,8 +381,7 @@ function buildCaCharacter(): CaRig {
   const deepBlueMat = createMatteMaterial(SCENE_COLORS.caBlueDeep, { roughness: 0.8 });
   const bellyMat = createMatteMaterial(SCENE_COLORS.caBelly, { roughness: 0.85 });
   const cheekMat = createMatteMaterial(SCENE_COLORS.caCheek, { roughness: 0.86 });
-  const scleraMat = createMatteMaterial(SCENE_COLORS.ivory, { roughness: 0.65 });
-  const inkMat = createMatteMaterial(SCENE_COLORS.ink, { roughness: 0.55 });
+  const { scleraMat, inkMat } = shared;
 
   // Neck transition
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.125, 0.14, 16), blueMat);
@@ -247,8 +415,9 @@ function buildCaCharacter(): CaRig {
   headPivot.add(mouthInner);
 
   // Soft warm coral cheek blush medallions
+  const blushGeo = new THREE.SphereGeometry(0.05, 12, 10);
   for (const sx of [-1, 1]) {
-    const blush = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), cheekMat);
+    const blush = new THREE.Mesh(blushGeo, cheekMat);
     blush.position.set(sx * 0.175, 0.14, 0.16);
     blush.scale.set(0.55, 0.72, 0.9);
     headPivot.add(blush);
@@ -297,30 +466,32 @@ function buildCaCharacter(): CaRig {
     headPivot.add(fin);
   }
 
-  // Prominent Round Fish Eyes with subtle upper lids
+  // Prominent Round Fish Eyes with subtle upper lids (shared eye geometries)
+  const eyeRimGeo = new THREE.SphereGeometry(0.072, 18, 16);
+  const eyeScleraGeo = new THREE.SphereGeometry(0.066, 18, 16);
+  const eyePupilGeo = new THREE.SphereGeometry(0.034, 14, 12);
+  const eyeGlintGeo = new THREE.SphereGeometry(0.012, 10, 8);
+  const eyeLidGeo = new THREE.SphereGeometry(0.071, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.42);
   const createFishEye = (sx: number): THREE.Mesh => {
     const eyeGroup = new THREE.Group();
     eyeGroup.position.set(sx * 0.14, 0.245, 0.195);
 
-    const rim = new THREE.Mesh(new THREE.SphereGeometry(0.072, 18, 16), deepBlueMat);
+    const rim = new THREE.Mesh(eyeRimGeo, deepBlueMat);
     rim.position.z = -0.012;
     eyeGroup.add(rim);
 
-    const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.066, 18, 16), scleraMat);
+    const sclera = new THREE.Mesh(eyeScleraGeo, scleraMat);
     eyeGroup.add(sclera);
 
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.034, 14, 12), inkMat);
+    const pupil = new THREE.Mesh(eyePupilGeo, inkMat);
     pupil.position.set(sx * 0.008, 0.0, 0.052);
     eyeGroup.add(pupil);
 
-    const glint = new THREE.Mesh(new THREE.SphereGeometry(0.012, 10, 8), scleraMat);
+    const glint = new THREE.Mesh(eyeGlintGeo, scleraMat);
     glint.position.set(sx * 0.018, 0.018, 0.074);
     eyeGroup.add(glint);
 
-    const lid = new THREE.Mesh(
-      new THREE.SphereGeometry(0.071, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.42),
-      blueMat,
-    );
+    const lid = new THREE.Mesh(eyeLidGeo, blueMat);
     lid.position.y = 0.008;
     lid.rotation.x = -0.22;
     eyeGroup.add(lid);
@@ -343,18 +514,23 @@ interface CaoRig {
   readonly browR: THREE.Mesh;
 }
 
-function buildCaoCharacter(): CaoRig {
+function buildCaoCharacter(shared: SharedRivalResources): CaoRig {
   const group = new THREE.Group();
   group.name = 'CharacterCao';
 
   const { leanPivot, bodyContainer } = createLeanWrapper(group);
 
-  const body = buildSeatedTorso({
-    vestColor: SCENE_COLORS.caoJacket,
-    shirtColor: SCENE_COLORS.caoCream,
-    handColor: SCENE_COLORS.caoOrange,
-    tieColor: SCENE_COLORS.caoTie,
-  });
+  const body = buildSeatedTorso(
+    {
+      vestColor: SCENE_COLORS.caoJacket,
+      shirtColor: SCENE_COLORS.caoCream,
+      sleeveColor: SCENE_COLORS.caoJacket,
+      cuffColor: SCENE_COLORS.caoCream,
+      handColor: SCENE_COLORS.caoPaw,
+      tieColor: SCENE_COLORS.caoTie,
+    },
+    shared,
+  );
   bodyContainer.add(body);
 
   const headPivot = new THREE.Group();
@@ -366,8 +542,7 @@ function buildCaoCharacter(): CaoRig {
   const creamMat = createMatteMaterial(SCENE_COLORS.caoCream, { roughness: 0.87 });
   const earInnerMat = createMatteMaterial(SCENE_COLORS.caoEarInner, { roughness: 0.88 });
   const tipMat = createMatteMaterial(SCENE_COLORS.caoEarTip, { roughness: 0.82 });
-  const scleraMat = createMatteMaterial(SCENE_COLORS.ivory, { roughness: 0.65 });
-  const inkMat = createMatteMaterial(SCENE_COLORS.ink, { roughness: 0.55 });
+  const { scleraMat, inkMat } = shared;
 
   // Neck
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.14, 16), orangeMat);
@@ -383,8 +558,9 @@ function buildCaoCharacter(): CaoRig {
   headPivot.add(cranium);
 
   // Prominent cream cheek ruffs flaring gently outward (classic fox silhouette!)
+  const cheekGeo = new THREE.ConeGeometry(0.12, 0.22, 12);
   for (const sx of [-1, 1]) {
-    const cheek = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.22, 12), creamMat);
+    const cheek = new THREE.Mesh(cheekGeo, creamMat);
     cheek.position.set(sx * 0.2, 0.145, 0.05);
     cheek.rotation.z = sx * -1.18;
     cheek.rotation.y = sx * 0.25;
@@ -470,8 +646,11 @@ function buildCaoCharacter(): CaoRig {
     headPivot.add(earGroup);
   }
 
-  // Sly expressive Fox Eyes + angled eyebrows
+  // Sly expressive Fox Eyes + angled eyebrows (shared eye geometries)
   const browGeo = new THREE.CapsuleGeometry(0.014, 0.08, 6, 8);
+  const eyeScleraGeo = new THREE.SphereGeometry(0.046, 16, 14);
+  const eyePupilGeo = new THREE.SphereGeometry(0.026, 12, 10);
+  const eyeGlintGeo = new THREE.SphereGeometry(0.008, 8, 8);
   const brows: THREE.Mesh[] = [];
 
   for (const sx of [-1, 1]) {
@@ -479,16 +658,16 @@ function buildCaoCharacter(): CaoRig {
     eyeGroup.position.set(sx * 0.095, 0.24, 0.185);
     eyeGroup.rotation.y = sx * 0.24;
 
-    const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.046, 16, 14), scleraMat);
+    const sclera = new THREE.Mesh(eyeScleraGeo, scleraMat);
     sclera.scale.set(1.18, 0.78, 0.72);
     eyeGroup.add(sclera);
 
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.026, 12, 10), inkMat);
+    const pupil = new THREE.Mesh(eyePupilGeo, inkMat);
     pupil.position.set(0, -0.002, 0.028);
     pupil.scale.set(0.82, 1.05, 0.7);
     eyeGroup.add(pupil);
 
-    const glint = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 8), scleraMat);
+    const glint = new THREE.Mesh(eyeGlintGeo, scleraMat);
     glint.position.set(0.01, 0.01, 0.044);
     eyeGroup.add(glint);
 
@@ -518,19 +697,24 @@ interface NongRig {
   readonly browR: THREE.Mesh;
 }
 
-function buildNongCharacter(): NongRig {
+function buildNongCharacter(shared: SharedRivalResources): NongRig {
   const group = new THREE.Group();
   group.name = 'CharacterNong';
 
   const { leanPivot, bodyContainer } = createLeanWrapper(group);
 
-  const body = buildSeatedTorso({
-    vestColor: SCENE_COLORS.nongVest,
-    shirtColor: SCENE_COLORS.nongSweater,
-    handColor: SCENE_COLORS.nongRed,
-    leanForward: 0.08,
-    rightArmReach: 0.14,
-  });
+  const body = buildSeatedTorso(
+    {
+      vestColor: SCENE_COLORS.nongVest,
+      shirtColor: SCENE_COLORS.nongSweater,
+      sleeveColor: SCENE_COLORS.nongSweater,
+      cuffColor: SCENE_COLORS.nongStripe,
+      handColor: SCENE_COLORS.nongHand,
+      leanForward: 0.08,
+      rightArmReach: 0.06,
+    },
+    shared,
+  );
   bodyContainer.add(body);
 
   const headPivot = new THREE.Group();
@@ -553,8 +737,7 @@ function buildNongCharacter(): NongRig {
     transparent: true,
     opacity: 0.9,
   });
-  const scleraMat = createMatteMaterial(SCENE_COLORS.ivory, { roughness: 0.65 });
-  const inkMat = createMatteMaterial(SCENE_COLORS.ink, { roughness: 0.55 });
+  const { scleraMat, inkMat } = shared;
 
   // Matte kettle collar neck
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.135, 0.12, 18), brassMat);
@@ -670,23 +853,26 @@ function buildNongCharacter(): NongRig {
     steamGroup.add(pMesh);
   }
 
-  // Expressive Face sculpted onto the front (+Z) belly of the kettle
+  // Expressive Face sculpted onto the front (+Z) belly of the kettle (shared eye geometries)
   const brows: THREE.Mesh[] = [];
   const browGeo = new THREE.CapsuleGeometry(0.017, 0.088, 6, 8);
+  const eyeScleraGeo = new THREE.SphereGeometry(0.048, 16, 14);
+  const eyePupilGeo = new THREE.SphereGeometry(0.025, 12, 10);
+  const eyeGlintGeo = new THREE.SphereGeometry(0.009, 8, 8);
   for (const sx of [-1, 1]) {
     const eyeGroup = new THREE.Group();
     eyeGroup.position.set(sx * 0.088, 0.255, 0.242);
     eyeGroup.rotation.y = sx * 0.28;
 
-    const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.048, 16, 14), scleraMat);
+    const sclera = new THREE.Mesh(eyeScleraGeo, scleraMat);
     sclera.scale.set(1.05, 0.96, 0.56);
     eyeGroup.add(sclera);
 
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.025, 12, 10), inkMat);
+    const pupil = new THREE.Mesh(eyePupilGeo, inkMat);
     pupil.position.set(0, 0, 0.024);
     eyeGroup.add(pupil);
 
-    const glint = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 8), scleraMat);
+    const glint = new THREE.Mesh(eyeGlintGeo, scleraMat);
     glint.position.set(0.008, 0.01, 0.044);
     eyeGroup.add(glint);
 
@@ -719,27 +905,114 @@ function buildHeroPresence(): THREE.Group {
   const hero = new THREE.Group();
   hero.name = 'HeroPresence';
 
-  // Hero sits at the near edge (+Z), represented by subtle resting cuffs/forearms at the corners
-  // of the near rail so the near seat feels grounded without obstructing cards or camera sightlines.
+  // Hero sits at the near edge (+Z), with tapered sleeves extending outward past the outer rail edge
+  // toward Hero's body, knitted cuffs, and proportionate hands resting cleanly ON TOP OF the wooden rail
+  // (y_rail_top = 0.117 -> every mesh min.y >= 0.125) without obstructing cards, pot, call or board.
   const sleeveMat = createMatteMaterial(SCENE_COLORS.heroSleeve, { roughness: 0.88 });
   const cuffMat = createMatteMaterial(SCENE_COLORS.heroCuff, { roughness: 0.86 });
-  const skinMat = createMatteMaterial(SCENE_COLORS.heroSkin, { roughness: 0.84 });
+  const skinMat = createMatteMaterial(SCENE_COLORS.heroSkin, { roughness: 0.82 });
+
+  // Shared tapered sleeve geometry curving smoothly down outside the outer rail edge (z_local < -0.30)
+  // toward Hero's seated body, while staying strictly above the rail plateau over the rail
+  const heroSleeveCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, -0.24, -0.62),
+    new THREE.Vector3(0, -0.05, -0.44),
+    new THREE.Vector3(0, 0.004, -0.28),
+    new THREE.Vector3(0, 0.004, -0.14),
+    new THREE.Vector3(0, 0.0, -0.026),
+  ]);
+  const sleeveGeo = createTaperedSleeveGeometry(
+    heroSleeveCurve,
+    22,
+    18,
+    0.066,
+    0.046,
+    0.0524,
+    0.0276,
+  );
+
+  // Shared knitted cuff profile seamlessly continuing the sleeve taper into the wrist
+  const cuffProfile = [
+    new THREE.Vector2(0.0, -0.028),
+    new THREE.Vector2(0.046, -0.028),
+    new THREE.Vector2(0.047, -0.016),
+    new THREE.Vector2(0.042, 0.01),
+    new THREE.Vector2(0.037, 0.014),
+    new THREE.Vector2(0.0, 0.014),
+  ];
+  const cuffGeo = new THREE.LatheGeometry(cuffProfile, 18);
+  cuffGeo.rotateX(Math.PI / 2);
+
+  const wristGeo = new THREE.CylinderGeometry(0.036, 0.04, 0.038, 16);
+  wristGeo.rotateX(Math.PI / 2);
+
+  const palmGeo = new THREE.SphereGeometry(0.056, 16, 14);
+  const fingerLengths: readonly number[] = [0.044, 0.051, 0.048, 0.039];
+  const fingerGeos = fingerLengths.map((len) => {
+    const geo = new THREE.CapsuleGeometry(0.012, len, 6, 8);
+    geo.rotateX(Math.PI / 2 + 0.08);
+    return geo;
+  });
+  const thumbGeo = new THREE.CapsuleGeometry(0.013, 0.038, 6, 8);
+  thumbGeo.rotateX(Math.PI / 2 + 0.06);
 
   for (const sx of [-1, 1]) {
-    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.068, 0.28, 8, 12), sleeveMat);
-    forearm.position.set(sx * 0.72, 0.095, 1.36);
-    forearm.rotation.x = Math.PI / 2 - 0.12;
-    forearm.rotation.z = sx * 0.35;
-    forearm.castShadow = true;
-    hero.add(forearm);
+    const armGroup = new THREE.Group();
+    armGroup.name = sx < 0 ? 'HeroArmLeft' : 'HeroArmRight';
+    // Level with the rail plateau (y = 0.122 > 0.117 rail top), extending from beyond the outer rail edge inward
+    armGroup.position.set(sx * 0.54, 0.122, 1.3);
+    armGroup.rotation.y = Math.PI - sx * 0.26;
 
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.064, 0.066, 0.05, 14), cuffMat);
-    cuff.position.set(sx * 0.63, 0.105, 1.2);
-    cuff.rotation.x = Math.PI / 2 - 0.12;
-    cuff.rotation.z = sx * 0.35;
-    hero.add(cuff);
+    const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
+    sleeve.name = 'HeroSleeve';
+    sleeve.position.set(0, 0.038, 0);
+    sleeve.castShadow = true;
+    sleeve.receiveShadow = true;
+    armGroup.add(sleeve);
 
-    addSculptedHand(hero, skinMat, sx * 0.57, 0.095, 1.11, Math.PI - sx * 0.35, -sx);
+    const cuff = new THREE.Mesh(cuffGeo, cuffMat);
+    cuff.name = 'HeroCuff';
+    cuff.scale.set(1.14, 0.6, 1.0);
+    cuff.position.set(0, 0.038, 0);
+    cuff.castShadow = true;
+    armGroup.add(cuff);
+
+    const wrist = new THREE.Mesh(wristGeo, skinMat);
+    wrist.name = 'HeroWrist';
+    wrist.scale.set(1.1, 0.58, 1.0);
+    wrist.position.set(0, 0.033, 0.024);
+    wrist.castShadow = true;
+    armGroup.add(wrist);
+
+    const palm = new THREE.Mesh(palmGeo, skinMat);
+    palm.name = 'HeroPalm';
+    palm.scale.set(1.08, 0.46, 1.15);
+    palm.position.set(0, 0.028, 0.068);
+    palm.castShadow = true;
+    palm.receiveShadow = true;
+    armGroup.add(palm);
+
+    // 4 distinct readable fingers resting on the rail top (castShadow = false)
+    for (let i = 0; i < 4; i += 1) {
+      const lateral = (-1.5 + i) * sx;
+      const len = fingerLengths[i] ?? 0.044;
+      const finger = new THREE.Mesh(fingerGeos[i], skinMat);
+      finger.name = `HeroFinger${i}`;
+      finger.position.set(lateral * 0.024, 0.019, 0.118 + (len - 0.044) * 0.45);
+      finger.rotation.y = lateral * 0.055;
+      finger.castShadow = false;
+      armGroup.add(finger);
+    }
+
+    // Inner articulated thumb (castShadow = false)
+    const thumb = new THREE.Mesh(thumbGeo, skinMat);
+    thumb.name = 'HeroThumb';
+    thumb.position.set(-sx * 0.056, 0.02, 0.07);
+    thumb.rotation.y = -sx * 0.48;
+    thumb.castShadow = false;
+    armGroup.add(thumb);
+
+    hero.add(armGroup);
   }
 
   return hero;
@@ -749,17 +1022,19 @@ export function buildCharacters(): CharactersRig {
   const root = new THREE.Group();
   root.name = 'Characters';
 
-  const ca = buildCaCharacter();
+  const shared = createSharedRivalResources();
+
+  const ca = buildCaCharacter(shared);
   ca.group.position.set(-1.82, 0, -1.14);
   ca.group.rotation.y = 0.92;
   root.add(ca.group);
 
-  const cao = buildCaoCharacter();
+  const cao = buildCaoCharacter(shared);
   cao.group.position.set(0.0, 0, -1.72);
   cao.group.rotation.y = 0.0;
   root.add(cao.group);
 
-  const nong = buildNongCharacter();
+  const nong = buildNongCharacter(shared);
   nong.group.position.set(1.82, 0, -1.14);
   nong.group.rotation.y = -0.92;
   root.add(nong.group);
