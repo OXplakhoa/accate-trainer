@@ -347,6 +347,26 @@ describe('L2 3D look and lighting polish', () => {
     expect(linearLuma(rugFieldColor)).toBeLessThan(linearLuma(wallShadeColor));
     expect(linearLuma(rugBandColor)).toBeLessThan(linearLuma(rugFieldColor));
 
+    // Rug world-space outer extent sits inside the camera framing (< 3.56 / 2.74 half-extents) while extending beyond the table's outer rail footprint
+    const rug = room.getObjectByName('PropRug')!;
+    const railMesh = room.getObjectByName('TableRail')!;
+    expect(rug).toBeDefined();
+    expect(railMesh).toBeDefined();
+    const rugBox = new THREE.Box3().setFromObject(rug);
+    const railBox = new THREE.Box3().setFromObject(railMesh);
+    const rugHalfExtentX = (rugBox.max.x - rugBox.min.x) * 0.5;
+    const rugHalfExtentZ = (rugBox.max.z - rugBox.min.z) * 0.5;
+    const railHalfExtentX = (railBox.max.x - railBox.min.x) * 0.5;
+    const railHalfExtentZ = (railBox.max.z - railBox.min.z) * 0.5;
+    expect(rugHalfExtentX).toBeLessThan(3.56);
+    expect(rugHalfExtentZ).toBeLessThan(2.74);
+    expect(rugHalfExtentX).toBeGreaterThan(railHalfExtentX);
+    expect(rugHalfExtentZ).toBeGreaterThan(railHalfExtentZ);
+    expect(rugBox.max.x).toBeGreaterThan(TABLE_METRICS.railOuterRx);
+    expect(rugBox.min.x).toBeLessThan(-TABLE_METRICS.railOuterRx);
+    expect(rugBox.max.z).toBeGreaterThan(TABLE_METRICS.railOuterRz);
+    expect(rugBox.min.z).toBeLessThan(-TABLE_METRICS.railOuterRz);
+
     // Above-floor props must remain behind or outside the table & rival chairs so they never enter table sightlines
     for (const propName of ['PropTeaCabinet', 'PropPottedPlant', 'PropWallClock', 'PropSideStool']) {
       const prop = room.getObjectByName(propName)!;
