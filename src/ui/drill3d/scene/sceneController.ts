@@ -71,7 +71,7 @@ function easeOutCubic(t: number): number {
   return 1 - inv * inv * inv;
 }
 
-function computeAdaptiveFov(baseFov: number, minHFov: number, aspect: number): number {
+export function computeAdaptiveFov(baseFov: number, minHFov: number, aspect: number): number {
   if (aspect <= 0 || !Number.isFinite(aspect)) {
     return baseFov;
   }
