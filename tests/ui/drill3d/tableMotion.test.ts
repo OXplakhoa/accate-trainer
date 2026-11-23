@@ -1399,9 +1399,10 @@ describe('L1 fix1: chip conservation, closing call, monotonic progress, dealer d
     const projectY = (v: THREE.Vector3) => (-v.clone().project(mobileCam).y * 0.5 + 0.5) * mobileH;
 
     for (const seatId of ALL_SEAT_IDS) {
-      const pos = SEAT_LAYOUTS[seatId].bubblePos;
+      const layout = SEAT_LAYOUTS[seatId];
+      const pos = layout.bubblePos;
       const center = new THREE.Vector3(pos[0], pos[1], pos[2]);
-      const halfH = TABLETOP_METRICS.bubbleScale.y / 2;
+      const halfH = layout.bubbleScale.y / 2;
       const topY = projectY(center.clone().addScaledVector(camUp, halfH));
       const botY = projectY(center.clone().addScaledVector(camUp, -halfH));
       const spriteCssPx = Math.abs(botY - topY);

@@ -73,6 +73,7 @@ const CALL_POS = { x: 0.6, z: 0.56 } as const;
 const FALLBACK_DEAL_ORIGIN: readonly [number, number, number] = [0.0, 0.06, -0.72];
 
 export const ACTION_BUBBLE_SCALE = { x: 1.28, y: 0.37 } as const;
+export const HERO_ACTION_BUBBLE_SCALE = { x: 0.766, y: 0.325 } as const;
 
 const HERO_CARD_OFFSETS: readonly { readonly x: number; readonly z: number; readonly rotY: number }[] = [
   { x: -0.175, z: 0.96, rotY: 0.065 },
@@ -96,6 +97,7 @@ interface SeatLayout {
   readonly actorRingPos: readonly [number, number];
   readonly actorRingScale: readonly [number, number];
   readonly bubblePos: readonly [number, number, number];
+  readonly bubbleScale: { readonly x: number; readonly y: number };
 }
 
 export const SEAT_LAYOUTS: Readonly<Record<TableSeatId, SeatLayout>> = {
@@ -110,6 +112,7 @@ export const SEAT_LAYOUTS: Readonly<Record<TableSeatId, SeatLayout>> = {
     actorRingPos: [-1.28, -0.68],
     actorRingScale: [1.18, 0.88],
     bubblePos: [-1.24, 0.48, -0.62],
+    bubbleScale: ACTION_BUBBLE_SCALE,
   },
   cao: {
     id: 'cao',
@@ -122,6 +125,7 @@ export const SEAT_LAYOUTS: Readonly<Record<TableSeatId, SeatLayout>> = {
     actorRingPos: [0.0, -0.96],
     actorRingScale: [1.18, 0.88],
     bubblePos: [0.0, 0.5, -0.9],
+    bubbleScale: ACTION_BUBBLE_SCALE,
   },
   nong: {
     id: 'nong',
@@ -134,6 +138,7 @@ export const SEAT_LAYOUTS: Readonly<Record<TableSeatId, SeatLayout>> = {
     actorRingPos: [1.28, -0.68],
     actorRingScale: [1.18, 0.88],
     bubblePos: [1.24, 0.48, -0.62],
+    bubbleScale: ACTION_BUBBLE_SCALE,
   },
   hero: {
     id: 'hero',
@@ -145,7 +150,8 @@ export const SEAT_LAYOUTS: Readonly<Record<TableSeatId, SeatLayout>> = {
     betPos: [0.38, 0.56],
     actorRingPos: [0.0, 0.92],
     actorRingScale: [1.62, 0.92],
-    bubblePos: [0.46, 0.38, 0.68],
+    bubblePos: [1.34, 0.06, 0.74],
+    bubbleScale: HERO_ACTION_BUBBLE_SCALE,
   },
 };
 
@@ -721,11 +727,12 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     }
 
     const nextKey = `${spec.tone}:${spec.label}`;
+    const textureOptions = seatId === 'hero' ? { compact: true } : undefined;
     let sprite = seatBubbles[seatId];
     if (!sprite) {
       const layout = SEAT_LAYOUTS[seatId];
       const bubbleMat = new THREE.SpriteMaterial({
-        map: createActionBubbleTexture(spec),
+        map: createActionBubbleTexture(spec, textureOptions),
         transparent: true,
         depthTest: false,
         depthWrite: false,
@@ -733,7 +740,7 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
       sprite = new THREE.Sprite(bubbleMat);
       sprite.name = `SeatBubble-${seatId}`;
       sprite.position.set(layout.bubblePos[0], layout.bubblePos[1], layout.bubblePos[2]);
-      sprite.scale.set(ACTION_BUBBLE_SCALE.x, ACTION_BUBBLE_SCALE.y, 1);
+      sprite.scale.set(layout.bubbleScale.x, layout.bubbleScale.y, 1);
       liveSeatsRoot.add(sprite);
       seatBubbles[seatId] = sprite;
       seatBubbleKeys[seatId] = nextKey;
@@ -743,7 +750,7 @@ export function buildTabletop(initialSpot: SceneTableSnapshot): TabletopRig {
     if (seatBubbleKeys[seatId] !== nextKey) {
       const mat = sprite.material;
       const prevMap = mat.map;
-      mat.map = createActionBubbleTexture(spec);
+      mat.map = createActionBubbleTexture(spec, textureOptions);
       mat.needsUpdate = true;
       prevMap?.dispose();
       seatBubbleKeys[seatId] = nextKey;

@@ -93,10 +93,32 @@ export const ACTION_BUBBLE_CANVAS = {
   fontSizeLong: 58,
 } as const;
 
-export function createActionBubbleTexture(spec: ActionBubbleSpec): THREE.CanvasTexture {
+/**
+ * Compact pill canvas for Hero's badge: preserves the exact 112px height and 64/58px
+ * bold typography of ACTION_BUBBLE_CANVAS while trimming excess horizontal padding so
+ * Hero's badge fits cleanly on the near-right felt without overlapping cards, stacks,
+ * hands/forearms, or HUD overlays.
+ */
+export const HERO_ACTION_BUBBLE_CANVAS = {
+  width: 264,
+  height: 112,
+  fontSizeNormal: 64,
+  fontSizeLong: 58,
+} as const;
+
+export interface ActionBubbleTextureOptions {
+  readonly compact?: boolean;
+}
+
+export function createActionBubbleTexture(
+  spec: ActionBubbleSpec,
+  options: ActionBubbleTextureOptions = {},
+): THREE.CanvasTexture {
+  const compact = options.compact ?? false;
+  const dims = compact ? HERO_ACTION_BUBBLE_CANVAS : ACTION_BUBBLE_CANVAS;
   const canvas = document.createElement('canvas');
-  canvas.width = ACTION_BUBBLE_CANVAS.width;
-  canvas.height = ACTION_BUBBLE_CANVAS.height;
+  canvas.width = dims.width;
+  canvas.height = dims.height;
   const ctx = canvas.getContext('2d');
   if (ctx) {
     const style = TONE_STYLES[spec.tone];
@@ -105,12 +127,12 @@ export function createActionBubbleTexture(spec: ActionBubbleSpec): THREE.CanvasT
     // Subtle grounded shadow
     ctx.save();
     ctx.fillStyle = 'rgba(22, 16, 12, 0.30)';
-    drawPillPath(ctx, 10, 12, 364, 92, 46);
+    drawPillPath(ctx, 10, 12, dims.width - 20, 92, 46);
     ctx.fill();
     ctx.restore();
 
     // Main pill body
-    drawPillPath(ctx, 8, 6, 368, 92, 46);
+    drawPillPath(ctx, 8, 6, dims.width - 16, 92, 46);
     ctx.fillStyle = style.bg;
     ctx.fill();
 
@@ -122,12 +144,11 @@ export function createActionBubbleTexture(spec: ActionBubbleSpec): THREE.CanvasT
     ctx.fillStyle = style.text;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    const longThreshold = compact ? 7 : 9;
     const fontSize =
-      spec.label.length > 9
-        ? ACTION_BUBBLE_CANVAS.fontSizeLong
-        : ACTION_BUBBLE_CANVAS.fontSizeNormal;
+      spec.label.length > longThreshold ? dims.fontSizeLong : dims.fontSizeNormal;
     ctx.font = `800 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-    ctx.fillText(spec.label, 192, 54, 336);
+    ctx.fillText(spec.label, dims.width / 2, 54, dims.width - 48);
   }
 
   const texture = new THREE.CanvasTexture(canvas);
